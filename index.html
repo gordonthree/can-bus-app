@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Modern CAN Monitor</title>
+    <style>
+        :root {
+            --bg-color: #121212;
+            --card-bg: #1e1e1e;
+            --border: #333;
+            --text: #e0e0e0;
+            --accent: #4ec9b0;
+        }
+
+        body { font-family: 'Segoe UI', Tahoma, sans-serif; 
+               background: var(--bg-color); 
+               color: var(--text); 
+               padding: 20px; }
+        
+        /* Grid Configuration */
+        .can-grid {
+            display: grid;
+            grid-template-columns: 1.5fr 1fr 3fr 0.5fr; /* Time, ID, Data, DLC */
+            gap: 1px;
+            background-color: var(--border);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            height: 300px;
+            overflow-y: auto;
+        }
+
+        .config-grid {
+            display: grid;
+            grid-template-columns: 1.5fr 1fr 3fr 0.5fr; /* Time, ID, Data, DLC */
+            gap: 1px;
+            background-color: var(--border);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            height: 800px;
+            overflow-y: auto;
+        }
+
+
+        .header-cell, .data-cell {
+            padding: 12px;
+            background-color: var(--card-bg);
+        }
+
+        .header-cell {
+            font-weight: bold;
+            background-color: #252526;
+            color: var(--accent);
+            text-transform: uppercase;
+            font-size: 0.8rem;
+            height: 16px;
+            vertical-align: middle;
+        }
+
+        .data-cell { font-family: 'Cascadia Code', monospace; 
+                     font-size: 0.9rem; 
+                     height: 16px; 
+                     vertical-align: middle; }
+
+        .hex-id { color: #ce9178; }
+        .hex-data { color: #dcdcaa; }
+
+        /* Color coding based on CAN ID range */
+        .range-switch   { background-color: #3d5a80 !important; 
+                          color: #e0e0e0; } /* 0x100-0x1FF (Switch)*/
+        .range-display  { background-color: #4f6d7a !important; 
+                          color: #e0e0e0; } /* 0x200-0x2FF (Display) */
+        .range-config   { background-color: #5f7d8a !important; 
+                          color: #e0e0e0; } /* 0x400-0x4FF (System/Config) */
+        .range-data     { background-color: #6b5655 !important; 
+                          color: #e0e0e0; } /* 0x500-0x5FF (Data) */
+        .range-intro    { background-color: #2f621f !important; 
+                          color: #ffffff; } /* 0x700-0x7FF (Introduction) */
+
+        .controls { margin-bottom: 20px; 
+                    display: flex; 
+                    gap: 10px; 
+                    align-items: center; 
+                    vertical-align: middle;}
+
+        #filter-input { background: #2d2d2d; 
+                        border: 1px solid #444; 
+                        color: white; 
+                        padding: 5px 10px; 
+                        border-radius: 4px; }
+
+        button { cursor: pointer; 
+                 background: var(--accent); 
+                 border: none; 
+                 padding: 6px 12px; 
+                 border-radius: 4px; 
+                 font-weight: bold; }
+
+        .filter-tag { 
+            display: inline-block; 
+            background: #3e3e42; 
+            padding: 2px 8px; 
+            border-radius: 12px; 
+            font-size: 0.8rem; 
+            margin-left: 5px;
+            border: 1px solid var(--accent);
+        }
+
+        #status { margin-bottom: 15px; font-size: 0.9rem; }
+    </style>
+</head>
+<body>
+    <h2>Live CAN Bus Feed</h2>
+    <div class="controls">
+        <div id="status">Status: Connecting...</div>
+        <input type="text" id="filter-input" placeholder="Enter ID (e.g. 0x123)">
+        <button onclick="toggleFilter()">Toggle Filter</button>
+        <div id="active-filters"></div>
+    </div>
+    <div class="can-grid" id="editor-container">
+        <div class="header-cell">Select</div>
+        <div class="header-cell">ID (Hex)</div>
+        <div class="header-cell">Data (Payload)</div>
+        <div class="header-cell">DLC</div>
+        
+    </div>
+    <span>&nbsp;</span>
+    <div class="can-grid" id="can-container">
+        <div class="header-cell">Timestamp</div>
+        <div class="header-cell">ID (Hex)</div>
+        <div class="header-cell">Data (Payload)</div>
+        <div class="header-cell">DLC</div>
+        
+    </div>
+    <script src="client.js"></script>
+
+</body>
+</html>
