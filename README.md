@@ -1,5 +1,7 @@
 # Simple "configurator" app for the CAN-Control Project
 
+Basic NodeJS Web Application
+
 Goals:
 * Monitor real-time CAN traffic
 * Discover devices on the bus
