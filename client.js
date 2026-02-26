@@ -97,10 +97,15 @@ function renderNodeDatabase(db) {
         // Parent Row
         const parentCells = [
             // Change the button HTML string to include 'event'
-            { html: `<button class="expand-btn" onclick="toggleSubModules(event, '${nodeId}')">+</button>`, class: 'node-parent' },
+            { html: `<button class="compact-btn" onclick="toggleSubModules(event, '${nodeId}')">+</button>
+                     <button class="compact-btn" onclick="interviewNode('${nodeId}')">I</button>
+                     <button class="compact-btn" onclick="eraseNode('${nodeId}')">X</button>
+                     <button class="compact-btn" onclick="commandNode('${nodeId}')">C</button>`,
+                    class: 'node-parent'
+            },
             { html: `ID: ${nodeId}`, class: 'node-parent hex-id' },
             { html: `Type: 0x${node.nodeTypeMsg.toString(16).toUpperCase() + ' Sub modules: ' + node.subModCnt + ' Config CRC: ' + node.configCrc}`, class: 'node-parent' },
-            { html: node.subModCnt, class: 'node-parent' }
+            { html: node.nodeTypeDlc, class: 'node-parent' }
         ];
 
         parentCells.forEach(cell => {
@@ -113,7 +118,10 @@ function renderNodeDatabase(db) {
         /* === Sub-Module Rows === */
         Object.values(node.subModule).forEach(sub => {
             const subCells = [
-                { html: '└─', class: 'sub-module-row' },
+                { html: `<button class="compact-btn" onclick="editSubModule('${nodeId,sub.subModIdx}')">E</button>
+                        └─`, 
+                  class: 'sub-module-row' 
+                },
                 { html: `SubIdx: ${sub.subModIdx}`, class: 'sub-module-row' },
                 { html: `DataMsg: 0x${sub.dataMsgId.toString(16).toUpperCase() + ' Raw Config: 0x' + sub.rawConfig[0].toString(16).toUpperCase().padStart(HEX_BYTE_LENGTH, '0 ') + ' 0x' + sub.rawConfig[1].toString(16).toUpperCase().padStart(HEX_BYTE_LENGTH, '0 ') + ' 0x' + sub.rawConfig[2].toString(16).toUpperCase().padStart(HEX_BYTE_LENGTH, '0 ') }`, class: 'sub-module-row' },
                 { html: sub.dataMsgDlc, class: 'sub-module-row' }
