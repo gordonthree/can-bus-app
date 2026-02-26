@@ -58,6 +58,7 @@ const server = http.createServer((req, res) => {
             res.writeHead(200, { 'Content-Type': contentType });
             res.end(content, 'utf-8');
         }
+        return;
     });
 
     /* Dump the in-memory database to client */
@@ -82,11 +83,27 @@ server.listen(HTTP_PORT, () => {
 // 2. WebSocket Server
 const wss = new WebSocketServer({ port: WS_PORT });
 
+wss.on('connection', (ws) => {
+    console.log('Client connected, sending node database...');
+    sendNodeDatabase();
+});
+
 // 3. CAN Bus Setup
 const channel = can.createRawChannel("can0", true);
 
 /* === Functions === */
 
+function sendNodeDatabase() {
+    /* Send the database via WS on request */
+    fs.readFile('./can-node-database.json', 'utf8', (err, data) => {
+        if (!err && wss.readyState === 1) {
+            wss.send(JSON.stringify({
+                type: 'DATABASE_UPDATE',
+                payload: JSON.parse(data)
+            }));
+        }
+    });
+}
 /**
  * Constructs an 8-byte CAN payload:
  * Bytes 0-3: Zeroed (Reserved/Padding)
@@ -345,6 +362,7 @@ channel.addListener("onMessage", (msg) => {
 
     /* Broadcast to WebSockets as before */
     const payload = JSON.stringify({
+        type: 'CAN_MESSAGE', // Added type to distinguish from database
         id: msg.id,
         data: [...msg.data],
         timestamp: Date.now()

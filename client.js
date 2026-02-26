@@ -13,61 +13,91 @@ const activeFilters = new Set();
 const HEADER_COUNT = 4; 
 const MAX_ROWS = 20;
 
-socket.onopen = () => {
-    statusDiv.innerText = 'Status: Connected';
-    statusDiv.style.color = '#4ec9b0';
+document.addEventListener('DOMContentLoaded', () => {
+    // Initialize elements after DOM is ready
+    container = document.getElementById('can-container');
+    statusDiv = document.getElementById('status');
+    
+    // Use the current window hostname for the socket connection
+    const socketUrl = `ws://${window.location.hostname}:8080`;
+    socket = new WebSocket(socketUrl);
+
+    socket.onopen = () => {
+        if (statusDiv) {
+            statusDiv.innerText = 'Status: Connected';
+            statusDiv.style.color = '#4ec9b0';
+        }
+    };
+
+    socket.onmessage = (event) => {
+    const message = JSON.parse(event.data);
+
+    // Route message based on the 'type' property
+    if (message.type === 'DATABASE_UPDATE') {
+        renderNodeDatabase(message.payload);
+    } else if (message.type === 'CAN_MESSAGE') {
+        processLiveCanFrame(message);
+    }
 };
 
+    socket.onclose = () => {
+        if (statusDiv) {
+            statusDiv.innerText = 'Status: Disconnected';
+            statusDiv.style.color = '#f44747';
+        }
+    };
+
+
+});
+
 /* === Functions === */
+
 /**
- * Fetches and renders the node database into the editor-container
+ * Refactored database renderer
+ * @param {Object} db - The database object from the server
  */
-async function loadNodeDatabase() {
+function renderNodeDatabase(db) {
     const editorContainer = document.getElementById('editor-container');
-    const EDITOR_HEADERS = 4;
+    // Clear existing (except headers)
+    while (editorContainer.children.length > 4) {
+        editorContainer.removeChild(editorContainer.lastChild);
+    }
 
-    try {
-        const response = await fetch('/api/database');
-        const db = await response.json();
+    Object.entries(db).forEach(([key, node]) => {
+        const nodeId = node.nodeId || 'Unknown';
+        
+        // Parent Row
+        const parentCells = [
+            { html: `<button class="expand-btn" onclick="toggleSubModules('${nodeId}')">+</button>`, class: 'node-parent' },
+            { html: `ID: ${nodeId}`, class: 'node-parent hex-id' },
+            { html: `Type: 0x${node.nodeTypeMsg.toString(16).toUpperCase()}`, class: 'node-parent' },
+            { html: node.subModCnt, class: 'node-parent' }
+        ];
 
-        Object.entries(db).forEach(([key, node]) => {
-            const nodeId = node.nodeId || 'Unknown';
-            
-            // 1. Create Parent Row Cells
-            const parentCells = [
-                { html: `<button class="expand-btn" onclick="toggleSubModules('${nodeId}')">+</button>`, class: 'node-parent' },
-                { html: `ID: ${nodeId}`, class: 'node-parent hex-id' },
-                { html: `Node Type Msg: 0x${node.nodeTypeMsg.toString(16).toUpperCase()}`, class: 'node-parent' },
-                { html: node.subModCnt, class: 'node-parent' }
+        parentCells.forEach(cell => {
+            const div = document.createElement('div');
+            div.className = `data-cell ${cell.class}`;
+            div.innerHTML = cell.html;
+            editorContainer.appendChild(div);
+        });
+
+        // Sub-Module Rows
+        Object.values(node.subModule).forEach(sub => {
+            const subCells = [
+                { html: '└─', class: 'sub-module-row' },
+                { html: `SubIdx: ${sub.subModIdx}`, class: 'sub-module-row' },
+                { html: `DataMsg: 0x${sub.dataMsgId.toString(16).toUpperCase()}`, class: 'sub-module-row' },
+                { html: sub.dataMsgDlc, class: 'sub-module-row' }
             ];
 
-            parentCells.forEach(cell => {
+            subCells.forEach(cell => {
                 const div = document.createElement('div');
-                div.className = `data-cell ${cell.class}`;
+                div.className = `data-cell ${cell.class} node-${nodeId}`;
                 div.innerHTML = cell.html;
                 editorContainer.appendChild(div);
             });
-
-            // 2. Create Sub-Module Rows (hidden by default)
-            Object.values(node.subModule).forEach(sub => {
-                const subCells = [
-                    { html: '└─', class: 'sub-module-row' },
-                    { html: `SubIdx: ${sub.subModIdx}`, class: 'sub-module-row' },
-                    { html: `DataMsg: 0x${sub.dataMsgId.toString(16).toUpperCase()}`, class: 'sub-module-row' },
-                    { html: sub.dataMsgDlc, class: 'sub-module-row' }
-                ];
-
-                subCells.forEach(cell => {
-                    const div = document.createElement('div');
-                    div.className = `data-cell ${cell.class} node-${nodeId}`;
-                    div.innerHTML = cell.html;
-                    editorContainer.appendChild(div);
-                });
-            });
         });
-    } catch (err) {
-        console.error('Failed to load database:', err);
-    }
+    });
 }
 
 /**
@@ -84,7 +114,7 @@ function toggleSubModules(nodeId) {
 }
 
 // Initialize on load
-document.addEventListener('DOMContentLoaded', loadNodeDatabase);
+// document.addEventListener('DOMContentLoaded', loadNodeDatabase);
 
 /**
  * Toggles a specific CAN ID in the filter set
@@ -127,8 +157,7 @@ function getRowClass(id) {
     return '';
 }
 
-socket.onmessage = (event) => {
-    const msg = JSON.parse(event.data);
+function processLiveCanFrame(msg) {
     const hexId = '0x' + msg.id.toString(16).toLowerCase();
     const rangeClass = getRowClass(msg.id);
 
@@ -165,7 +194,3 @@ socket.onmessage = (event) => {
     }
 };
 
-socket.onclose = () => {
-    statusDiv.innerText = 'Status: Disconnected';
-    statusDiv.style.color = '#f44747';
-};
