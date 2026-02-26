@@ -106,6 +106,17 @@
         }
 
         #status { margin-bottom: 15px; font-size: 0.9rem; }
+
+        .node-parent { font-weight: bold; background-color: #2a2d2e !important; border-bottom: 1px solid var(--accent); }
+        .sub-module-row { display: none; background-color: #1a1a1b !important; font-size: 0.85rem; }
+        .sub-module-row.expanded { display: contents; } /* Display contents allows children to align to parent grid */
+        .expand-btn { 
+            background: none; 
+            border: 1px solid var(--accent); 
+            color: var(--accent); 
+            padding: 2px 6px; 
+            font-size: 0.7rem; 
+        }
     </style>
 </head>
 <body>

@@ -18,6 +18,74 @@ socket.onopen = () => {
     statusDiv.style.color = '#4ec9b0';
 };
 
+/* === Functions === */
+/**
+ * Fetches and renders the node database into the editor-container
+ */
+async function loadNodeDatabase() {
+    const editorContainer = document.getElementById('editor-container');
+    const EDITOR_HEADERS = 4;
+
+    try {
+        const response = await fetch('/api/database');
+        const db = await response.json();
+
+        Object.entries(db).forEach(([key, node]) => {
+            const nodeId = node.nodeId || 'Unknown';
+            
+            // 1. Create Parent Row Cells
+            const parentCells = [
+                { html: `<button class="expand-btn" onclick="toggleSubModules('${nodeId}')">+</button>`, class: 'node-parent' },
+                { html: `ID: ${nodeId}`, class: 'node-parent hex-id' },
+                { html: `Node Type Msg: 0x${node.nodeTypeMsg.toString(16).toUpperCase()}`, class: 'node-parent' },
+                { html: node.subModCnt, class: 'node-parent' }
+            ];
+
+            parentCells.forEach(cell => {
+                const div = document.createElement('div');
+                div.className = `data-cell ${cell.class}`;
+                div.innerHTML = cell.html;
+                editorContainer.appendChild(div);
+            });
+
+            // 2. Create Sub-Module Rows (hidden by default)
+            Object.values(node.subModule).forEach(sub => {
+                const subCells = [
+                    { html: '└─', class: 'sub-module-row' },
+                    { html: `SubIdx: ${sub.subModIdx}`, class: 'sub-module-row' },
+                    { html: `DataMsg: 0x${sub.dataMsgId.toString(16).toUpperCase()}`, class: 'sub-module-row' },
+                    { html: sub.dataMsgDlc, class: 'sub-module-row' }
+                ];
+
+                subCells.forEach(cell => {
+                    const div = document.createElement('div');
+                    div.className = `data-cell ${cell.class} node-${nodeId}`;
+                    div.innerHTML = cell.html;
+                    editorContainer.appendChild(div);
+                });
+            });
+        });
+    } catch (err) {
+        console.error('Failed to load database:', err);
+    }
+}
+
+/**
+ * Toggles visibility of sub-modules for a specific node ID
+ * @param {string} nodeId - The ID of the node to toggle
+ */
+function toggleSubModules(nodeId) {
+    const rows = document.querySelectorAll(`.node-${nodeId}`);
+    rows.forEach(row => row.classList.toggle('expanded'));
+    
+    // Update button text
+    const btn = event.target;
+    btn.innerText = btn.innerText === '+' ? '-' : '+';
+}
+
+// Initialize on load
+document.addEventListener('DOMContentLoaded', loadNodeDatabase);
+
 /**
  * Toggles a specific CAN ID in the filter set
  */
