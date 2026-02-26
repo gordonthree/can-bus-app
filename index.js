@@ -12,6 +12,7 @@ const myNodeId                        = [0x19, 0x00, 0x00, 0x19]; /* Four byte N
 const NODE_ID_BYTE_LENGTH             = 4; /**< Number of bytes in a Node ID */
 const INTRO_MSG_DLC                   = 8; /**< Data length for "intro" messages */
 const SUBMODCNT_OFFSET                = 4; /**< Offset of sub-module count in "intro" messages */
+const CONFIGCRC_OFFSET                = 5; /**< Offset of node configuration CRC in "intro" messages */
 const INTRO_MSG_BEGIN                 = 0x780; /**< Beginning of module (node) "intro" messages */
 const INTRO_MSG_END                   = 0x7FF; /**< End of module (node) "intro" messages */
 const SUBMOD_INTRO_BEGIN              = 0x700; /**< Beginning of sub-module "intro" messages */
@@ -26,7 +27,7 @@ const SUBMOD_RAW2_OFFSET              = 7; /**< Third of three raw config bytes 
 const SUBMOD_DATAMSGID_MSB_OFFSET     = 5; /**< Offset of data message ID MSB in "intro" messages */
 const SUBMOD_DATAMSGID_LSB_OFFSET     = 6; /**< Offset of data message ID LSB in "intro" messages */
 const SUBMOD_DATAMSGDLC_OFFSET        = 7; /**< Offset of data message DLC in "intro" messages */
-
+const HEARTBEAT_INTERVAL              = 30000; /**< Check every 30 seconds */
 /* In-memory database for CAN messages */
 const canDatabase                     = {};
 
@@ -41,6 +42,17 @@ import * as CAN_MSG from './can_constants.js'
 import console from 'console';
 
 /* === Setup === */
+
+const interval = setInterval(() => {
+    wss.clients.forEach((ws) => {
+        if (ws.isAlive === false) {
+            console.log('Terminating inactive connection');
+            return ws.terminate();
+        }
+        ws.isAlive = false; /**< Mark as potentially dead; reset on pong */
+        ws.ping();
+    });
+}, HEARTBEAT_INTERVAL);
 
 // 1. Static HTTP Server to serve HTML/JS files
 const server = http.createServer((req, res) => {
@@ -84,33 +96,28 @@ server.listen(HTTP_PORT, () => {
 const wss = new WebSocketServer({ port: WS_PORT });
 
 wss.on('connection', (ws) => {
+    ws.isAlive = true;
+    ws.on('pong', () => { ws.isAlive = true; });
+
     fs.readFile('./can-node-database.json', 'utf8', (err, data) => {
         if (!err && ws.readyState === 1) {
             /* Wrap database in a type-flagged object */
             ws.send(JSON.stringify({
                 type: 'DATABASE_UPDATE',
-                payload: JSON.parse(data)
+                payload: canDatabase /**< Pass the in-memory database */
             }));
         }
     });
 });
+
+wss.on('close', () => clearInterval(interval));
 
 // 3. CAN Bus Setup
 const channel = can.createRawChannel("can0", true);
 
 /* === Functions === */
 
-function sendNodeDatabase() {
-    /* Send the database via WS on request */
-    fs.readFile('./can-node-database.json', 'utf8', (err, data) => {
-        if (!err && wss.readyState === 1) {
-            wss.send(JSON.stringify({
-                type: 'DATABASE_UPDATE',
-                payload: JSON.parse(data)
-            }));
-        }
-    });
-}
+
 /**
  * Constructs an 8-byte CAN payload:
  * Bytes 0-3: Zeroed (Reserved/Padding)
@@ -261,10 +268,12 @@ function updateNodeDatabase(msg) {
         }
 
         myNode.nodeId          = nodeString;
-        myNode.lastSeen        = Date.now(); /**< Update last seen time */
+        myNode.lastSeen        = Date.now(); 
         myNode.nodeTypeMsg     = messageId;
         myNode.nodeTypeDlc     = INTRO_MSG_DLC;
         myNode.subModCnt       = msg.data[SUBMODCNT_OFFSET];
+        myNode.configCrc       = ((msg.data[CONFIGCRC_OFFSET] << 8) |
+                                  (msg.data[CONFIGCRC_OFFSET + 1] & 0xFF));
 
 
         if (myNode.lastSubModIdx >= (myNode.subModCnt - 1)) { /* sub module count is 0-indexed */
@@ -272,7 +281,7 @@ function updateNodeDatabase(msg) {
             myNode.introComplete = true;
             // console.log("Node:", nodeString, "interview complete, not sending ack");
         } else {
-            console.log("Node:", nodeString, "Sub-module count:", myNode.subModCnt);
+            console.log("Node:", nodeString, "Sub-module count:", myNode.subModCnt, "CRC: ", myNode.configCrc);
             sendAckMsg(msg); /**< Acknowledge the intro message */
         }
 

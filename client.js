@@ -7,7 +7,9 @@ let statusDiv;
 let filterInput;
 let filterDisplay;
 
-const activeFilters = new Set();
+const activeFilters   = new Set();
+const RETRY_DELAY     = 5000; /**< Wait 5 seconds before reconnecting */
+const HEX_BYTE_LENGTH = 2; /**< Display length of a single hex byte */
 
 // Offset for headers (first 4 divs)
 const HEADER_COUNT = 4; 
@@ -55,6 +57,29 @@ document.addEventListener('DOMContentLoaded', () => {
 
 /* === Functions === */
 
+function formatTimestampAsUTC(milliseconds) {
+  const dateObj = new Date(milliseconds);
+  const hours = dateObj.getUTCHours().toString().padStart(2, '0');
+  const minutes = dateObj.getUTCMinutes().toString().padStart(2, '0');
+  const seconds = dateObj.getUTCSeconds().toString().padStart(2, '0');
+
+  return `${hours}:${minutes}:${seconds}`;
+}
+
+function connect() {
+    const socketUrl = `ws://${window.location.hostname}:8080`;
+    socket = new WebSocket(socketUrl);
+
+    socket.onclose = () => {
+        statusDiv.innerText = 'Status: Disconnected. Retrying...';
+        statusDiv.style.color = '#f44747';
+        setTimeout(connect, RETRY_DELAY);
+    };
+
+    /* ... include your existing onmessage and onopen handlers ... */
+}
+
+document.addEventListener('DOMContentLoaded', connect);
 /**
  * Refactored database renderer
  * @param {Object} db - The database object from the server
@@ -74,7 +99,7 @@ function renderNodeDatabase(db) {
             // Change the button HTML string to include 'event'
             { html: `<button class="expand-btn" onclick="toggleSubModules(event, '${nodeId}')">+</button>`, class: 'node-parent' },
             { html: `ID: ${nodeId}`, class: 'node-parent hex-id' },
-            { html: `Type: 0x${node.nodeTypeMsg.toString(16).toUpperCase()}`, class: 'node-parent' },
+            { html: `Type: 0x${node.nodeTypeMsg.toString(16).toUpperCase() + ' Sub modules: ' + node.subModCnt + ' Config CRC: ' + node.configCrc}`, class: 'node-parent' },
             { html: node.subModCnt, class: 'node-parent' }
         ];
 
@@ -85,18 +110,21 @@ function renderNodeDatabase(db) {
             editorContainer.appendChild(div);
         });
 
-        // Sub-Module Rows
+        /* === Sub-Module Rows === */
         Object.values(node.subModule).forEach(sub => {
             const subCells = [
                 { html: '└─', class: 'sub-module-row' },
                 { html: `SubIdx: ${sub.subModIdx}`, class: 'sub-module-row' },
-                { html: `DataMsg: 0x${sub.dataMsgId.toString(16).toUpperCase()}`, class: 'sub-module-row' },
+                { html: `DataMsg: 0x${sub.dataMsgId.toString(16).toUpperCase() + ' Raw Config: 0x' + sub.rawConfig[0].toString(16).toUpperCase().padStart(HEX_BYTE_LENGTH, '0 ') + ' 0x' + sub.rawConfig[1].toString(16).toUpperCase().padStart(HEX_BYTE_LENGTH, '0 ') + ' 0x' + sub.rawConfig[2].toString(16).toUpperCase().padStart(HEX_BYTE_LENGTH, '0 ') }`, class: 'sub-module-row' },
                 { html: sub.dataMsgDlc, class: 'sub-module-row' }
             ];
 
             subCells.forEach(cell => {
                 const div = document.createElement('div');
-                div.className = `data-cell ${cell.class} node-${nodeId}`;
+                /** * Ensure each cell has the sub-module-row class 
+                 * and the specific node toggle class.
+                 */
+                div.className = `data-cell ${cell.class} node-${nodeId}`; 
                 div.innerHTML = cell.html;
                 editorContainer.appendChild(div);
             });
@@ -171,8 +199,8 @@ function processLiveCanFrame(msg) {
         return; 
     }
 
-    const time = new Date(msg.timestamp).toISOString().split('T')[1].slice(0, -1);
-    const hexData = msg.data.map(b => b.toString(16).toUpperCase().padStart(2, '0')).join(' ');
+    const time = formatTimestampAsUTC(msg.timestamp);
+    const hexData = msg.data.map(b => b.toString(16).toUpperCase().padStart(HEX_BYTE_LENGTH, '0')).join(' ');
 
     const cells = [
         { text: time, class: '' },

@@ -108,8 +108,22 @@
         #status { margin-bottom: 15px; font-size: 0.9rem; }
 
         .node-parent { font-weight: bold; background-color: #2a2d2e !important; border-bottom: 1px solid var(--accent); }
-        .sub-module-row { display: none; background-color: #1a1a1b !important; font-size: 0.85rem; }
-        .sub-module-row.expanded { display: contents; } /* Display contents allows children to align to parent grid */
+        /* Ensure sub-module cells stay hidden by default */
+        .sub-module-row { 
+            display: none; 
+            background-color: #1a1a1b !important; 
+            font-size: 0.85rem; 
+            border-bottom: 1px solid #333; /* Visual separation for sub-rows */
+        }
+
+        /* 
+         * When expanded, change from 'none' to 'block' or 'grid-cell' behavior.
+         * Since they are direct children of a display:grid container, 
+         * setting them to anything other than 'none' puts them back in the grid. 
+         */
+        .sub-module-row.expanded { 
+            display: block; 
+        }
         .expand-btn { 
             background: none; 
             border: 1px solid var(--accent); 
@@ -120,21 +134,22 @@
     </style>
 </head>
 <body>
-    <h2>Live CAN Bus Feed</h2>
     <div class="controls">
         <div id="status">Status: Connecting...</div>
         <input type="text" id="filter-input" placeholder="Enter ID (e.g. 0x123)">
         <button onclick="toggleFilter()">Toggle Filter</button>
         <div id="active-filters"></div>
     </div>
+    <h2>Current Module Inventory</h2>
     <div class="can-grid" id="editor-container">
-        <div class="header-cell">Select</div>
+        <div class="header-cell">Command</div>
         <div class="header-cell">ID (Hex)</div>
         <div class="header-cell">Data (Payload)</div>
         <div class="header-cell">DLC</div>
         
     </div>
     <span>&nbsp;</span>
+    <h2>CAN Bus Live Feed</h2>
     <div class="can-grid" id="can-container">
         <div class="header-cell">Timestamp</div>
         <div class="header-cell">ID (Hex)</div>
