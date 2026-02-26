@@ -84,8 +84,15 @@ server.listen(HTTP_PORT, () => {
 const wss = new WebSocketServer({ port: WS_PORT });
 
 wss.on('connection', (ws) => {
-    console.log('Client connected, sending node database...');
-    sendNodeDatabase();
+    fs.readFile('./can-node-database.json', 'utf8', (err, data) => {
+        if (!err && ws.readyState === 1) {
+            /* Wrap database in a type-flagged object */
+            ws.send(JSON.stringify({
+                type: 'DATABASE_UPDATE',
+                payload: JSON.parse(data)
+            }));
+        }
+    });
 });
 
 // 3. CAN Bus Setup

@@ -1,11 +1,11 @@
 /**
  * WebSocket client for modern Div-based CAN visualization
  */
-const socket = new WebSocket('ws://cancontrol:8080');
-const container = document.getElementById('can-container');
-const statusDiv = document.getElementById('status');
-const filterInput = document.getElementById('filter-input');
-const filterDisplay = document.getElementById('active-filters');
+let socket;
+let container;
+let statusDiv;
+let filterInput;
+let filterDisplay;
 
 const activeFilters = new Set();
 
@@ -17,7 +17,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // Initialize elements after DOM is ready
     container = document.getElementById('can-container');
     statusDiv = document.getElementById('status');
-    
+    filterInput   = document.getElementById('filter-input');
+    filterDisplay = document.getElementById('active-filters');
+
     // Use the current window hostname for the socket connection
     const socketUrl = `ws://${window.location.hostname}:8080`;
     socket = new WebSocket(socketUrl);
@@ -35,7 +37,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // Route message based on the 'type' property
     if (message.type === 'DATABASE_UPDATE') {
         renderNodeDatabase(message.payload);
-    } else if (message.type === 'CAN_MESSAGE') {
+    } else if (message.type === 'CAN_MESSAGE' || (!message.type && message.id)) {
+        /* Support both old and new payload formats for compatibility */
         processLiveCanFrame(message);
     }
 };
@@ -68,7 +71,8 @@ function renderNodeDatabase(db) {
         
         // Parent Row
         const parentCells = [
-            { html: `<button class="expand-btn" onclick="toggleSubModules('${nodeId}')">+</button>`, class: 'node-parent' },
+            // Change the button HTML string to include 'event'
+            { html: `<button class="expand-btn" onclick="toggleSubModules(event, '${nodeId}')">+</button>`, class: 'node-parent' },
             { html: `ID: ${nodeId}`, class: 'node-parent hex-id' },
             { html: `Type: 0x${node.nodeTypeMsg.toString(16).toUpperCase()}`, class: 'node-parent' },
             { html: node.subModCnt, class: 'node-parent' }
@@ -102,13 +106,14 @@ function renderNodeDatabase(db) {
 
 /**
  * Toggles visibility of sub-modules for a specific node ID
+ * @param {Event} event - The click event
  * @param {string} nodeId - The ID of the node to toggle
  */
-function toggleSubModules(nodeId) {
+function toggleSubModules(event, nodeId) {
     const rows = document.querySelectorAll(`.node-${nodeId}`);
     rows.forEach(row => row.classList.toggle('expanded'));
     
-    // Update button text
+    // Update button text safely using the passed event
     const btn = event.target;
     btn.innerText = btn.innerText === '+' ? '-' : '+';
 }
