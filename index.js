@@ -62,9 +62,16 @@ const server = http.createServer((req, res) => {
 
     /* Dump the in-memory database to client */
     if (req.url === '/api/database') {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(canDatabase));
-        return;
+        fs.readFile('./can-node-database.json', (error, content) => {
+            if (error) {
+                res.writeHead(500);
+                res.end('Error loading database');
+            } else {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(content);
+            }
+        });
+        return; // Exit early to prevent falling through to static file serving
     }
 });
 
