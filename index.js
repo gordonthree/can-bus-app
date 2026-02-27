@@ -73,19 +73,6 @@ const server = http.createServer((req, res) => {
         return;
     });
 
-    /* Dump the in-memory database to client */
-    if (req.url === '/api/database') {
-        fs.readFile('./can-node-database.json', (error, content) => {
-            if (error) {
-                res.writeHead(500);
-                res.end('Error loading database');
-            } else {
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(content);
-            }
-        });
-        return; // Exit early to prevent falling through to static file serving
-    }
 });
 
 server.listen(HTTP_PORT, () => {
@@ -96,16 +83,52 @@ server.listen(HTTP_PORT, () => {
 const wss = new WebSocketServer({ port: WS_PORT });
 
 wss.on('connection', (ws) => {
+/** * Set initial liveness for the heartbeat cleanup logic */
     ws.isAlive = true;
     ws.on('pong', () => { ws.isAlive = true; });
 
-    fs.readFile('./can-node-database.json', 'utf8', (err, data) => {
-        if (!err && ws.readyState === 1) {
-            /* Wrap database in a type-flagged object */
-            ws.send(JSON.stringify({
-                type: 'DATABASE_UPDATE',
-                payload: canDatabase /**< Pass the in-memory database */
-            }));
+    console.log('Client connected, sending live in-memory node database...');
+    
+    /** * Verify the socket is open before sending. 
+     * WebSocket.OPEN (value 1) ensures the connection is ready.
+     */
+    if (ws.readyState === 1) { // 1 represents WebSocket.OPEN
+        ws.send(JSON.stringify({
+            type: 'DATABASE_UPDATE',
+            payload: canDatabase /**< Reference to the live in-memory object */
+        }));
+    }
+
+   ws.on('message', (message) => {
+        try {
+            const request = JSON.parse(message);
+
+            if (request.type === 'UPDATE_NODE_CONFIG') {
+                const { nodeId, subModIdx, dataMsgId, rawConfig, dataMsgDlc } = request;
+
+                /** * The database uses comma-separated keys (e.g., "59,105,134,176").
+                 * We find the entry where the .nodeId property matches the request.
+                 */
+                const dbKey = Object.keys(canDatabase).find(
+                    key => canDatabase[key].nodeId === nodeId
+                );
+
+                if (dbKey && canDatabase[dbKey].subModule[subModIdx]) {
+                    const targetSub = canDatabase[dbKey].subModule[subModIdx];
+
+                    // Update the in-memory object
+                    targetSub.dataMsgId = dataMsgId;
+                    targetSub.rawConfig = rawConfig;
+                    targetSub.dataMsgDlc = dataMsgDlc;
+
+                    console.log(`Updated Node ${nodeId} Sub ${subModIdx}: MsgId 0x${dataMsgId.toString(16).toUpperCase()}`);
+                    
+                    /* Optional: Persist to disk immediately */
+                    // saveDatabaseToFile();
+                }
+            }
+        } catch (err) {
+            console.error('Error processing WebSocket message:', err);
         }
     });
 });

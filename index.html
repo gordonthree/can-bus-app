@@ -107,7 +107,10 @@
 
         #status { margin-bottom: 15px; font-size: 0.9rem; }
 
-        .node-parent { font-weight: bold; background-color: #2a2d2e !important; border-bottom: 1px solid var(--accent); }
+        .node-parent { font-weight: bold; 
+                       background-color: #2a2d2e !important; 
+                       border-bottom: 1px solid var(--accent); 
+                    }
         /* Ensure sub-module cells stay hidden by default */
         .sub-module-row { 
             display: none; 
@@ -131,6 +134,24 @@
             padding: 2px 6px; 
             font-size: 0.7rem; 
         }
+        .oldedit-input {
+            background: #2d2d2d;
+            border: 0px solid; /* no border */
+            color: #ffffff;
+            padding: 1px 1px; /* minimal padding */
+            font-family: 'Cascadia Code', monospace;
+            font-size: 0.85rem;
+        }
+        .edit-input {
+            background: #2d2d2d;
+            border: none; 
+            color: #ffffff;
+            padding: 1px 1px;
+            font-family: 'Cascadia Code', monospace;
+            font-size: 0.85rem;
+            outline: none; /* Removes the default focus ring which acts like a border */
+        }
+        .save-btn { background-color: #2ea043 !important; color: white !important; }
     </style>
 </head>
 <body>

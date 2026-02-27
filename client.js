@@ -10,6 +10,7 @@ let filterDisplay;
 const activeFilters   = new Set();
 const RETRY_DELAY     = 5000; /**< Wait 5 seconds before reconnecting */
 const HEX_BYTE_LENGTH = 2; /**< Display length of a single hex byte */
+const SMALL_BYTE_WDH  = 2; /**< Character width of a two digital decimal integer */ 
 
 // Offset for headers (first 4 divs)
 const HEADER_COUNT = 4; 
@@ -59,9 +60,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
 function formatTimestampAsUTC(milliseconds) {
   const dateObj = new Date(milliseconds);
-  const hours = dateObj.getUTCHours().toString().padStart(2, '0');
-  const minutes = dateObj.getUTCMinutes().toString().padStart(2, '0');
-  const seconds = dateObj.getUTCSeconds().toString().padStart(2, '0');
+  const hours = dateObj.getUTCHours().toString().padStart(SMALL_BYTE_WDH, '0');
+  const minutes = dateObj.getUTCMinutes().toString().padStart(SMALL_BYTE_WDH, '0');
+  const seconds = dateObj.getUTCSeconds().toString().padStart(SMALL_BYTE_WDH, '0');
 
   return `${hours}:${minutes}:${seconds}`;
 }
@@ -80,6 +81,113 @@ function connect() {
 }
 
 document.addEventListener('DOMContentLoaded', connect);
+
+/**
+ * Toggles a sub-module row into edit mode using minimal in-line inputs.
+ * @param {Event} event - The click event.
+ * @param {string} nodeId - Parent node ID.
+ * @param {number} subIdx - Sub-module index.
+ */
+function editSubModule(event, nodeId, subIdx) {
+    const btn = event.target;
+    const subKey = `${nodeId}-${subIdx}`;
+    
+    const msgSpan = document.getElementById(`msg-${subKey}`);
+    const rawSpan = document.getElementById(`raw-${subKey}`);
+    const dlcSpan = document.getElementById(`dlc-${subKey}`);
+
+    if (btn.innerText === 'E') {
+        /* --- Enter Edit Mode --- */
+        // Store current values in data attributes in case user clicks 'X' (Cancel)
+        msgSpan.dataset.before = msgSpan.innerText;
+        rawSpan.dataset.before = rawSpan.innerText;
+        dlcSpan.dataset.before = dlcSpan.innerText;
+
+        const currentMsg = msgSpan.innerText;
+        const currentRaw = rawSpan.innerText;
+        const currentDlc = dlcSpan.innerText;
+    
+
+        msgSpan.innerHTML = `<input type="text" id="input-msg-${subKey}" class="edit-input" size="4" value="${currentMsg}">`;
+        rawSpan.innerHTML = `<input type="text" id="input-raw-${subKey}" class="edit-input" size="${currentRaw.length + 1}" value="${currentRaw}">`;
+        dlcSpan.innerHTML = `<input type="text" id="input-dlc-${subKey}" class="edit-input" size="4" value="${currentDlc}">`;
+
+        btn.innerText = 'S'; // Switch to Save
+        btn.classList.add('save-btn');
+    } else {
+        /* --- Save Mode --- */
+        const newMsgVal = document.getElementById(`input-msg-${subKey}`).value.trim();
+        const newRawVal = document.getElementById(`input-raw-${subKey}`).value.trim();
+        const newDlcVal = document.getElementById(`input-dlc-${subKey}`).value.trim();
+
+        /** * Parse the raw config string. 
+         * Regular expression /[ ,]+/ handles one or more spaces/commas as separators.
+         */
+        const rawArray = newRawVal.split(/[ ,]+/)
+                                  .filter(Boolean)
+                                  .map(hex => parseInt(hex, 16));
+
+        // Format back to your preferred 2-character hex string: 1B,3F,02
+        const formattedRaw = rawArray.map(val => 
+            val.toString(16).toUpperCase().padStart(2, '0')
+        ).join(',');
+
+        // Update UI
+        msgSpan.innerText = newMsgVal.toUpperCase();
+        rawSpan.innerText = formattedRaw;
+        dlcSpan.innerText = newDlcVal;
+
+        btn.innerText = 'E';
+        btn.classList.remove('save-btn');
+
+        // Transmit the update to the Node.js server
+        saveNodeUpdate(nodeId, subIdx, newMsgVal, rawArray, newDlcVal);
+    }
+}
+
+/**
+ * Cancels editing and reverts to the previous values.
+ * @param {Event} event - The click event.
+ * @param {string} nodeId - Parent node ID.
+ * @param {number} subIdx - Sub-module index.
+ */
+function closeEditor(event, nodeId, subIdx) {
+    const subKey = `${nodeId}-${subIdx}`;
+    const btnE = event.target.previousElementSibling; // Finds the 'S'/'E' button
+    
+    const msgSpan = document.getElementById(`msg-${subKey}`);
+    const rawSpan = document.getElementById(`raw-${subKey}`);
+    const dlcSpan = document.getElementById(`dlc-${subKey}`);
+
+    // Only revert if we are actually in edit mode (button is 'S')
+    if (btnE && btnE.innerText === 'S') {
+        msgSpan.innerText = msgSpan.dataset.before || '';
+        rawSpan.innerText = rawSpan.dataset.before || '';
+        dlcSpan.innerText = dlcSpan.dataset.before || '';
+
+        btnE.innerText = 'E';
+        btnE.classList.remove('save-btn');
+    }
+}
+
+/**
+ * Sends updated node configuration back to the server
+ */
+function saveNodeUpdate(nodeId, subIdx, msgHex, rawStr, dlcVal) {
+    const payload = {
+        type: 'UPDATE_NODE_CONFIG',
+        nodeId: nodeId,
+        subModIdx: subIdx,
+        dataMsgId: parseInt(msgHex, 16),
+        rawConfig: rawStr.split(',').map(Number),
+        dataMsgDlc: parseInt(dlcVal, 10)
+    };
+
+    if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify(payload)); // Send the payload to the server
+    }
+}
+
 /**
  * Refactored database renderer
  * @param {Object} db - The database object from the server
@@ -117,14 +225,25 @@ function renderNodeDatabase(db) {
 
         /* === Sub-Module Rows === */
         Object.values(node.subModule).forEach(sub => {
+            const subKey = `${nodeId}-${sub.subModIdx}`;
+
             const subCells = [
-                { html: `<button class="compact-btn" onclick="editSubModule('${nodeId,sub.subModIdx}')">E</button>
-                        └─`, 
-                  class: 'sub-module-row' 
+                { html:  `<button class="compact-btn" onclick="editSubModule(event,'${nodeId}',${sub.subModIdx})">E</button>
+                        <button class="compact-btn" onclick="closeEditor(event, '${nodeId}', ${sub.subModIdx})">X</button>`, 
+                class: 'sub-module-row' 
                 },
-                { html: `SubIdx: ${sub.subModIdx}`, class: 'sub-module-row' },
-                { html: `DataMsg: 0x${sub.dataMsgId.toString(16).toUpperCase() + ' Raw Config: 0x' + sub.rawConfig[0].toString(16).toUpperCase().padStart(HEX_BYTE_LENGTH, '0 ') + ' 0x' + sub.rawConfig[1].toString(16).toUpperCase().padStart(HEX_BYTE_LENGTH, '0 ') + ' 0x' + sub.rawConfig[2].toString(16).toUpperCase().padStart(HEX_BYTE_LENGTH, '0 ') }`, class: 'sub-module-row' },
-                { html: sub.dataMsgDlc, class: 'sub-module-row' }
+                { html:  `Idx: ${sub.subModIdx.toString().padStart(SMALL_BYTE_WDH, '0')}`, 
+                class: 'sub-module-row' 
+                },
+                { html:  `DataMsgId (hex): <span id="msg-${subKey}">${sub.dataMsgId.toString(16).toUpperCase()}</span>
+                          Raw Config (hex): <span id="raw-${subKey}">${
+                            sub.rawConfig.map(val => val.toString(16).toUpperCase().padStart(HEX_BYTE_LENGTH, '0')).join(',')
+                        }</span>`, 
+                class: 'sub-module-row' 
+                },
+                { html:  `<span id="dlc-${subKey}">${sub.dataMsgDlc}</span>`, 
+                class: 'sub-module-row' 
+                }
             ];
 
             subCells.forEach(cell => {
@@ -153,9 +272,6 @@ function toggleSubModules(event, nodeId) {
     const btn = event.target;
     btn.innerText = btn.innerText === '+' ? '-' : '+';
 }
-
-// Initialize on load
-// document.addEventListener('DOMContentLoaded', loadNodeDatabase);
 
 /**
  * Toggles a specific CAN ID in the filter set
