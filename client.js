@@ -115,6 +115,7 @@ function editSubModule(event, nodeId, subIdx) {
         btn.innerText = 'S'; // Switch to Save
         btn.classList.add('save-btn');
     } else {
+        console.log("Saving changes for sub-module:", subIdx);
         /* --- Save Mode --- */
         const newMsgVal = document.getElementById(`input-msg-${subKey}`).value.trim();
         const newRawVal = document.getElementById(`input-raw-${subKey}`).value.trim();
@@ -133,7 +134,7 @@ function editSubModule(event, nodeId, subIdx) {
         ).join(',');
 
         // Update UI
-        msgSpan.innerText = newMsgVal.toUpperCase();
+        msgSpan.innerText = newMsgVal.toUpperCase(); /* hex values as uppercase */
         rawSpan.innerText = formattedRaw;
         dlcSpan.innerText = newDlcVal;
 
@@ -171,20 +172,28 @@ function closeEditor(event, nodeId, subIdx) {
 }
 
 /**
- * Sends updated node configuration back to the server
+ * Sends updated node configuration back to the server.
+ * @param {string} nodeId - The target node's unique ID string.
+ * @param {number} subIdx - The sub-module index.
+ * @param {string} msgHex - The new message ID in hex format.
+ * @param {Array} rawArray - An array of decimal numbers representing the config.
+ * @param {number|string} dlcVal - The data length code.
  */
-function saveNodeUpdate(nodeId, subIdx, msgHex, rawStr, dlcVal) {
+function saveNodeUpdate(nodeId, subIdx, msgHex, rawArray, dlcVal) {
     const payload = {
         type: 'UPDATE_NODE_CONFIG',
         nodeId: nodeId,
         subModIdx: subIdx,
         dataMsgId: parseInt(msgHex, 16),
-        rawConfig: rawStr.split(',').map(Number),
+        /** * rawArray is already an array of numbers from the regex logic, 
+         * so we can pass it directly.
+         */
+        rawConfig: rawArray, 
         dataMsgDlc: parseInt(dlcVal, 10)
     };
 
     if (socket && socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify(payload)); // Send the payload to the server
+        socket.send(JSON.stringify(payload)); 
     }
 }
 
