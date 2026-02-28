@@ -8,11 +8,15 @@ let filterInput;
 let filterDisplay;
 
 const activeFilters   = new Set();
-const RETRY_DELAY     = 5000; /**< Wait 5 seconds before reconnecting */
-const HEX_BYTE_LENGTH = 2; /**< Display length of a single hex byte */
-const SMALL_BYTE_WDH  = 2; /**< Character width of a two digital decimal integer */ 
-
-// Offset for headers (first 4 divs)
+/** Wait 5 seconds before reconnecting */
+const RETRY_DELAY     = 5000; 
+/** Display length of a single hex byte */
+const HEX_BYTE_LENGTH = 2; 
+/** Character width of a two digital decimal integer */ 
+const SMALL_BYTE_WDH  = 2; 
+/** Base 16 for hexadecimal string parsing */
+const HEX_BASE = 16;
+/** Offset for headers (first 4 divs) */
 const HEADER_COUNT = 4; 
 const MAX_ROWS = 20;
 
@@ -158,8 +162,9 @@ function renderAuditLog(logs) {
             
             if (cell.isComment) {
                 div.innerHTML = `
-                    <input type="text" class="cell-input" 
+                    <input type="text"  
                            id="audit-comment-${cell.id}"
+                           class="audit-input"
                            value="${cell.text}" 
                            placeholder="Add note..."
                            onchange="saveAuditComment(${cell.id}, this.value)">
@@ -428,20 +433,20 @@ function getRowClass(id) {
 }
 
 function processLiveCanFrame(msg) {
-    const hexId = '0x' + msg.id.toString(16).toLowerCase();
+    const hexId = '0x' + msg.id.toString(HEX_BASE).toUpperCase();
     const rangeClass = getRowClass(msg.id);
 
     // Filtering Logic: If filters exist, skip messages that don't match
     if (activeFilters.size > 0 && !activeFilters.has(hexId)) {
         return; 
     }
-
-    const time = formatTimestampAsUTC(msg.timestamp);
-    const hexData = msg.data.map(b => b.toString(16).toUpperCase().padStart(HEX_BYTE_LENGTH, '0')).join(' ');
+    
+    const displayName = msg.name !== 'UNKNOWN' ? msg.name : hexId;
+    const hexData = msg.data.map(b => b.toString(HEX_BASE).toUpperCase().padStart(HEX_BYTE_LENGTH, '0')).join(' ');
 
     const cells = [
-        { text: time, class: '' },
-        { text: hexId.toUpperCase(), class: 'hex-id' },
+        { text: formatTimestampAsUTC(msg.timestamp), class: '' },
+        { text: displayName, class: 'hex-id' }, // Now shows the name!
         { text: hexData, class: 'hex-data' },
         { text: msg.data.length, class: '' }
     ];
