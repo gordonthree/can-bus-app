@@ -11,6 +11,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "better-sqlite3": "^12.6.2",
     "socketcan": "^4.0.7",
     "ws": "^8.19.0"
   }
