@@ -1,0 +1,17 @@
+This is a web based app that communicates with modules using CAN-bus. I like to call the modules on the bus "nodes". Each node has a unique 32-bit hardware based identification on the bus. Each node is assigned a type, determined by a 16-bit "introMsgId" value. Each node can have as many as eight sub-modules, and each of those has a personality that is defined by a 16-bit introMsgID. The messages that define parent and sub-module types are in the attached CSV. Sub-modules are in the range of 0x700 - 0x77F, and parent nodes are in the range of 0x780 - 0x79F. 
+
+
+
+My goal is to refactor the client side function "renderNodeDatabase". Right now it provides a basic in-line editor that can change the dataMsgId, dataMsgDlc and raw config payload of a sub-module. I want to expand this editor to offer in-line editing of all the data associated with a node and sub-modules. Rather than switching between viewing and editing, I want the editing mode to be the default, and changes to be sent back to the server side script as they are made. A button in the left-most column will instruct the server side script to persist the changes to the bus, actually updating the nodes. To describe the personalities I have included the the canbus_struct.h  C header file containing the structs nodeInfo_t and subModule_t. This header is used in the code for the nodes, which this web app will be communicating with over the CAN-bus.
+
+
+
+In the CSV file there are configuration messages that the server side script will use to persist changes to the nodes on the bus. These messages have ID values of 0x429 - 0x42D and 0x438 - 0x43F. Additionally, message ID 0x401 can be used to "interview" a node, gathering all the configuration information about that node. 
+
+
+
+The app utilizes a SQLite database to track the configuration of nodes on the bus, through the use of an audit trail. It also maintains a table consisting of the unique nodes and their last-known configurations. In the database there is also a table that maps CAN message IDs to their plain-English descriptions. One of my goals for the editor UI is to make use of the definitions in that table, in the form of drop-down selection lists, so the user doesn't need to memorize hexadecimal codes. 
+
+
+
+Gemini was helping me with this previously, but the chat session became corrupted after too many changes and had to be abandoned. The current app code is in a working but incomplete state. Only portions of the framework to support the new editor are in place on the server and client side scripts.
