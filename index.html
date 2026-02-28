@@ -161,6 +161,18 @@
         .flash-success {
             animation: flash-green 1.5s ease-out;
         }
+
+        /* Audit Grid Configuration (5 columns) */
+        .audit-grid {
+            display: grid;
+            grid-template-columns: 1fr 1.5fr 1fr 2fr 3fr; /* Time, Node, Field, Change, Comment */
+            gap: 1px;
+            background-color: var(--border);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            height: 300px;
+            overflow-y: auto;
+        }
     </style>
 </head>
 <body>
@@ -170,16 +182,27 @@
         <button onclick="toggleFilter()">Toggle Filter</button>
         <div id="active-filters"></div>
     </div>
+
     <h2>Current Module Inventory</h2>
     <div class="can-grid" id="editor-container">
         <div class="header-cell">Command</div>
         <div class="header-cell">ID (Hex)</div>
         <div class="header-cell">Data (Payload)</div>
-        <div class="header-cell">DLC</div>
-        
+        <div class="header-cell">DLC</div>        
     </div>
+
     <span>&nbsp;</span>
-    <h2>CAN Bus Live Feed</h2>
+    <h2>System Audit Log</h2>
+    <div class="audit-grid" id="audit-container">
+        <div class="header-cell">Timestamp</div>
+        <div class="header-cell">Node (Sub)</div>
+        <div class="header-cell">Field</div>
+        <div class="header-cell">Change</div>
+        <div class="header-cell">Notes / Comments</div>
+    </div>
+
+    <span>&nbsp;</span>
+    <h2>CAN Live Feed</h2>
     <div class="can-grid" id="can-container">
         <div class="header-cell">Timestamp</div>
         <div class="header-cell">ID (Hex)</div>

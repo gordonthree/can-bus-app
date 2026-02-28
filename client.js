@@ -35,18 +35,38 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     socket.onmessage = (event) => {
-    const message = JSON.parse(event.data);
+        const message = JSON.parse(event.data);
 
-    // Route message based on the 'type' property
-    if (message.type === 'DATABASE_UPDATE') {
-        renderNodeDatabase(message.payload);
-    } else if (message.type === 'UPDATE_ACK') {
-        handleSaveConfirmation(message.nodeId, message.subModIdx);
-    } else if (message.type === 'CAN_MESSAGE' || (!message.type && message.id)) {
-        /* Support both old and new payload formats for compatibility */
-        processLiveCanFrame(message);
-    }
-};
+        /** Route message based on the 'type' property. */
+        switch (message.type) {
+            case 'DATABASE_UPDATE':
+                renderNodeDatabase(message.payload);
+                break;
+
+            case 'UPDATE_ACK':
+                handleSaveConfirmation(message.nodeId, message.subModIdx);
+                break;
+
+            case 'AUDIT_LOG_UPDATE':
+                renderAuditLog(message.payload);
+                break;
+
+            case 'CAN_MESSAGE':
+                processLiveCanFrame(message);
+                break;
+
+            default:
+                /** * Fallback for legacy formats or unrecognized messages.
+                 * If the message has an ID but no type, treat it as a raw CAN frame.
+                 */
+                if (message.id) {
+                    processLiveCanFrame(message);
+                } else {
+                    console.warn('Received unrecognized WebSocket message:', message);
+                }
+                break;
+        }
+    };
 
     socket.onclose = () => {
         statusDiv.innerText = 'Status: Disconnected. ';
@@ -105,6 +125,64 @@ function connect() {
 }
 
 document.addEventListener('DOMContentLoaded', connect);
+
+/**
+ * Renders the audit log entries into the audit-grid
+ * @param {Array} logs - Recent audit entries from server
+ */
+function renderAuditLog(logs) {
+    const container = document.getElementById('audit-container');
+    
+    /** Preserve the first 5 header cells */
+    const headers = Array.from(container.children).slice(0, 5);
+    container.innerHTML = '';
+    headers.forEach(h => container.appendChild(h));
+
+    logs.forEach(log => {
+        const timeStr = new Date(log.timestamp).toLocaleTimeString();
+        const changeStr = `${log.old_value} ➔ ${log.new_value}`;
+        const comment = log.comment_text || '';
+
+        /** Create cells for each column */
+        const rowData = [
+            { text: timeStr, class: '' },
+            { text: `${log.node_id} (${log.sub_idx})`, class: 'hex-id' },
+            { text: log.field, class: '' },
+            { text: changeStr, class: 'hex-data' },
+            { isComment: true, text: comment, id: log.id }
+        ];
+
+        rowData.forEach(cell => {
+            const div = document.createElement('div');
+            div.className = 'data-cell';
+            
+            if (cell.isComment) {
+                div.innerHTML = `
+                    <input type="text" class="cell-input" 
+                           id="audit-comment-${cell.id}"
+                           value="${cell.text}" 
+                           placeholder="Add note..."
+                           onchange="saveAuditComment(${cell.id}, this.value)">
+                `;
+            } else {
+                div.className += ` ${cell.class}`;
+                div.innerText = cell.text;
+            }
+            container.appendChild(div);
+        });
+    });
+}
+
+/**
+ * Sends a comment update to the server
+ */
+function saveAuditComment(auditId, text) {
+    socket.send(JSON.stringify({
+        type: 'SAVE_AUDIT_COMMENT',
+        auditId: auditId,
+        comment: text
+    }));
+}
 
 /**
  * Toggles a sub-module row into edit mode using minimal in-line inputs.

@@ -187,6 +187,7 @@ wss.on('connection', (ws) => {
             type: 'DATABASE_UPDATE',
             payload: canDatabase /* Reference to the live in-memory object */
         }));
+        broadcastAuditLog();
     }
 
    ws.on('message', (message) => {
@@ -198,6 +199,10 @@ wss.on('connection', (ws) => {
                     handleNodeConfigUpdate(ws, request);
                     break;
                 
+                case 'SAVE_AUDIT_COMMENT':
+                    upsertComment.run(request.auditId, request.comment, Date.now());
+                    broadcastAuditLog(); /**< Refresh all clients with the new comment */
+                    break;
                 /* Add other message types here as needed */
                 default:
                     console.warn(`Unknown message type: ${request.type}`);
@@ -245,9 +250,34 @@ db.exec(`
             recorded_at INTEGER, /**< Timestamp in ms (Date.now()) */
             full_data TEXT       /**< Snapshot of all sub-modules at this time */
         );
+
+    CREATE TABLE IF NOT EXISTS config_comments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        audit_id INTEGER UNIQUE,
+        comment_text TEXT,
+        updated_at INTEGER,
+        FOREIGN KEY(audit_id) REFERENCES audit_log(id)
+    );
 `);
 
-/** * Prepare statements once for better performance */
+/** Fetch 20 most recent audits joined with their comments */
+const selectRecentAudit = db.prepare(`
+    SELECT a.id, a.timestamp, a.node_id, a.sub_idx, a.field, a.old_value, a.new_value, c.comment_text 
+    FROM audit_log a 
+    LEFT JOIN config_comments c ON a.id = c.audit_id 
+    ORDER BY a.timestamp DESC 
+    LIMIT 20
+`);
+
+/** Upsert a comment for a specific audit entry */
+const upsertComment = db.prepare(`
+    INSERT INTO config_comments (audit_id, comment_text, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(audit_id) DO UPDATE SET
+        comment_text = excluded.comment_text,
+        updated_at = excluded.updated_at
+`);
+
 const insertInventory = db.prepare(`
     INSERT INTO node_inventory (node_id, node_type_msg, sub_mod_cnt, config_crc, first_seen, last_seen, is_active, full_data)
     VALUES (?, ?, ?, ?, ?, ?, 1, ?)
@@ -273,6 +303,22 @@ const insertHistorySnapshot = db.prepare(`
 
 /* === Functions === */
 
+/**
+ * Broadcasts the 20 most recent audit logs to all connected clients.
+ */
+function broadcastAuditLog() {
+    const logs = selectRecentAudit.all();
+    const payload = JSON.stringify({
+        type: 'AUDIT_LOG_UPDATE',
+        payload: logs
+    });
+
+    for (const client of wss.clients) {
+        if (client.readyState === client.OPEN) {
+            client.send(payload);
+        }
+    }
+}
 
 /**
  * Updates current inventory and archives a snapshot if data has changed.
@@ -413,7 +459,11 @@ function handleNodeConfigUpdate(ws, data) {
                 );
             });
 
+            /** Record the transaction in database */
             updateTransaction(nodeId, nodeData);
+
+            /** Send updated log to connected WS clients */
+            broadcastAuditLog();
 
             ws.send(JSON.stringify({
                 type: 'UPDATE_ACK',
