@@ -143,4 +143,5 @@ vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
 
-**/can-node-database.json
+can-node-database.json
+can_management.db
