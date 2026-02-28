@@ -145,3 +145,4 @@ vite.config.ts.timestamp-*
 
 can-node-database.json
 can_management.db
+can_management.db-journal
