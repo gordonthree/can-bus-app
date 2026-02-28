@@ -10,6 +10,7 @@ const WS_PORT                         = 8080;   // Port for CAN data stream
 const CAN_STD_DLC                     = 8;  // Standard CAN frame data length
 const myNodeId                        = [0x19, 0x00, 0x00, 0x19]; /* Four byte Node ID for the master */
 const NODE_ID_OFFSET                  = 0; /**< Offset of Node ID in "intro" messages */
+const TS_PAYLOAD_OFFSET               = 4; /**< Offset of timestamp payload in "intro" messages */
 const NODE_ID_BYTE_LENGTH             = 4; /**< Number of bytes in a Node ID */
 const INTRO_MSG_DLC                   = 8; /**< Data length for "intro" messages */
 const SUBMODCNT_OFFSET                = 4; /**< Offset of sub-module count in "intro" messages */
@@ -29,6 +30,10 @@ const SUBMOD_DATAMSGID_MSB_OFFSET     = 5; /**< Offset of data message ID MSB in
 const SUBMOD_DATAMSGID_LSB_OFFSET     = 6; /**< Offset of data message ID LSB in "intro" messages */
 const SUBMOD_DATAMSGDLC_OFFSET        = 7; /**< Offset of data message DLC in "intro" messages */
 const HEARTBEAT_INTERVAL              = 30000; /**< Check every 30 seconds */
+const MS_PER_SECOND                   = 1000;  /* Factor to convert milliseconds to seconds */
+const SHIFT_BYTE                      = 8; /* Shift for byte operations */
+const BYTE_MASK                       = 0xFF; /* Mask for byte operations */
+
 /* In-memory database for CAN messages */
 const canDatabase                     = {};
 
@@ -41,6 +46,10 @@ let lastTsMsg                         = 0; /**< Timestamp of last "timestamp" me
 /* Import constants from can_constants.js */
 import * as CAN_MSG from './can_constants.js'
 import console from 'console';
+
+/* Simple SQLite database for tracking CAN modules and messages */
+import Database from 'better-sqlite3';
+const db = new Database('can_management.db');
 
 /* === Setup === */
 
@@ -124,45 +133,169 @@ wss.on('close', () => clearInterval(interval));
 // 3. CAN Bus Setup
 const channel = can.createRawChannel("can0", true);
 
+// 4. Database setup
+/**
+ * Initialize SQLite tables. 
+ * 'better-sqlite3' executes these synchronously on startup.
+ */
+db.exec(`
+    CREATE TABLE IF NOT EXISTS node_inventory (
+        node_id TEXT PRIMARY KEY,
+        node_type_msg INTEGER,
+        sub_mod_cnt INTEGER,
+        config_crc INTEGER,
+        first_seen INTEGER,
+        last_seen INTEGER,
+        is_active INTEGER DEFAULT 1,
+        full_data TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS audit_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp INTEGER DEFAULT (strftime('%s', 'now') * 1000),
+        node_id TEXT,
+        sub_idx INTEGER,
+        field TEXT,
+        old_value TEXT,
+        new_value TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS node_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            node_id TEXT,
+            node_type_msg INTEGER,
+            sub_mod_cnt INTEGER,
+            config_crc INTEGER,
+            recorded_at INTEGER, /**< Timestamp in ms (Date.now()) */
+            full_data TEXT       /**< Snapshot of all sub-modules at this time */
+        );
+`);
+
+/** * Prepare statements once for better performance */
+const insertInventory = db.prepare(`
+    INSERT INTO node_inventory (node_id, node_type_msg, sub_mod_cnt, config_crc, first_seen, last_seen, is_active, full_data)
+    VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+    ON CONFLICT(node_id) DO UPDATE SET 
+        node_type_msg = excluded.node_type_msg,
+        sub_mod_cnt   = excluded.sub_mod_cnt,
+        config_crc    = excluded.config_crc,
+        last_seen     = excluded.last_seen,
+        is_active     = 1,
+        full_data     = excluded.full_data
+`);
+
+const insertAudit = db.prepare(`
+    INSERT INTO audit_log (node_id, sub_idx, field, old_value, new_value) 
+    VALUES (?, ?, ?, ?, ?)
+`);
+
+/** * Prepared statement for snapshots */
+const insertHistorySnapshot = db.prepare(`
+    INSERT INTO node_history (node_id, node_type_msg, sub_mod_cnt, config_crc, recorded_at, full_data)
+    VALUES (?, ?, ?, ?, ?, ?)
+`);
+
 /* === Functions === */
 
+
 /**
- * Processes configuration updates, sends CAN messages on changes, and ACKs the client.
+ * Updates current inventory and archives a snapshot if data has changed.
+ * @param {string} nodeId - Target node.
+ * @param {Object} nodeData - The updated node object.
+ */
+function recordNodeSnapshot(nodeId, nodeData) {
+    /* 1. Update the 'Current State' in node_inventory */
+    syncNodeToDatabase(nodeId, nodeData);
+
+    /* 2. Archive the snapshot in node_history */
+    insertHistorySnapshot.run(
+        nodeId,
+        nodeData.nodeTypeMsg,
+        nodeData.subModCnt,
+        nodeData.configCrc,
+        Date.now(),
+        JSON.stringify(nodeData.subModule)
+    );
+}
+
+/**
+ * Synchronizes the in-memory state to SQLite.
+ */
+function syncNodeToDatabase(nodeId, nodeData) {
+    insertInventory.run(
+        nodeId,
+        nodeData.nodeTypeMsg,
+        nodeData.subModCnt,
+        nodeData.configCrc,
+        nodeData.firstSeen,
+        nodeData.lastSeen,
+        JSON.stringify(nodeData.subModule)
+    );
+}
+
+/**
+ * Logs a manual configuration change.
+ */
+function logManualChange(nodeId, subIdx, field, oldVal, newVal) {
+    insertAudit.run(
+        nodeId, 
+        subIdx, 
+        field, 
+        JSON.stringify(oldVal), 
+        JSON.stringify(newVal)
+    );
+}
+
+/**
+ * Retrieves the history of a specific sub-module.
+ */
+function getSubModuleHistory(nodeId, subIdx) {
+    const snapshots = db.prepare("SELECT recorded_at, full_data " +
+                                 "FROM node_history " +
+                                 "WHERE node_id = ? ORDER BY recorded_at DESC").all(nodeId);
+    
+    return snapshots.map(s => {
+        const subModules = JSON.parse(s.full_data);
+        return {
+            time: new Date(s.recorded_at).toLocaleString(),
+            config: subModules[subIdx]
+        };
+    });
+}
+
+/**
+ * Processes configuration updates, sends CAN messages, and archives snapshots in SQLite.
  * @param {WebSocket} ws - The specific client connection to respond to.
  * @param {Object} data - The payload containing nodeId, subModIdx, etc.
  */
 function handleNodeConfigUpdate(ws, data) {
     const { nodeId, subModIdx, dataMsgId, rawConfig, dataMsgDlc } = data;
 
-    /* Locate the node in the in-memory database */
-    const dbKey = Object.keys(canDatabase).find(key => canDatabase[key].nodeId === nodeId);
-    if (!dbKey || !canDatabase[dbKey].subModule[subModIdx]) {
-        console.error(`Update failed: Node ${nodeId} Sub ${subModIdx} not found.`);
-        return;
-    }
-
-    const targetSub = canDatabase[dbKey].subModule[subModIdx];
+    const nodeData = canDatabase[nodeId]; 
+    if (nodeData === undefined) {
+    console.error(`Update failed: Node ${nodeId} not found.`);
+    return;
+}
+    const targetSub = nodeData.subModule[subModIdx];
     let hasChanged = false;
 
-    /** * 1. Check for ID/DLC changes and send CAN message 
+    /** * 1. Handle DataMsgId or DLC changes
      */
     if (targetSub.dataMsgId !== dataMsgId || targetSub.dataMsgDlc !== dataMsgDlc) {
-        
+        /* Log change to audit trail */
+        if (targetSub.dataMsgId !== dataMsgId) {
+            logManualChange(nodeId, subModIdx, 'dataMsgId', targetSub.dataMsgId, dataMsgId);
+        }
+        if (targetSub.dataMsgDlc !== dataMsgDlc) {
+            logManualChange(nodeId, subModIdx, 'dataMsgDlc', targetSub.dataMsgDlc, dataMsgDlc);
+        }
+
         const canPayload = Buffer.alloc(CAN_MSG.CFG_SUB_DATA_MSG_DLC);
-        
-        /* Bytes 0-3: Node ID (4 bytes) */
         Buffer.from(nodeId, 'hex').copy(canPayload, NODE_ID_OFFSET); 
-        
-        /* Byte 4: Sub-module Index */
         canPayload.writeUInt8(subModIdx, SUBMODID_OFFSET);      
-        
-        /* Bytes 5-6: Data Message ID (2 bytes, Big Endian) */
         canPayload.writeUInt16BE(dataMsgId, SUBMOD_DATAMSGID_MSB_OFFSET);   
-        
-        /* Byte 7: Data Message DLC */
         canPayload.writeUInt8(dataMsgDlc, SUBMOD_DATAMSGDLC_OFFSET);     
 
-        /* Send to the CAN bus via the established channel */
         channel.send({ id: CAN_MSG.CFG_SUB_DATA_MSG_ID, data: canPayload });
         
         targetSub.dataMsgId  = dataMsgId;
@@ -170,55 +303,54 @@ function handleNodeConfigUpdate(ws, data) {
         hasChanged = true;
     }
 
-    /** * 2. Check for Raw Config changes (comparison via stringification)
+    /** * 2. Handle Raw Config changes 
      */
     if (JSON.stringify(targetSub.rawConfig) !== JSON.stringify(rawConfig)) {
+        logManualChange(nodeId, subModIdx, 'rawConfig', targetSub.rawConfig, rawConfig);
         
         const canPayload = Buffer.alloc(CAN_MSG.CFG_SUB_RAW_DATA_DLC);
-        
-        /* Bytes 0-3: Node ID (4 bytes) */
         Buffer.from(nodeId, 'hex').copy(canPayload, NODE_ID_OFFSET); 
-
-        /* Byte 4: Sub-module Index */
         canPayload.writeUInt8(subModIdx, SUBMODID_OFFSET);
 
-        /* Byte 5-7: Raw config (3 bytes) */
-        Buffer.from(rawConfig, 'hex').copy(canPayload, SUBMOD_RAW0_OFFSET);
+        /* Copy the array of bytes directly into the buffer */
+        Buffer.from(rawConfig).copy(canPayload, SUBMOD_RAW0_OFFSET);
         
-        /* Send to the CAN bus via the established channel */
         channel.send({ id: CAN_MSG.CFG_SUB_RAW_DATA_ID, data: canPayload });
         
         targetSub.rawConfig = rawConfig;
         hasChanged = true;
     }
 
-    /* 3. Persist and Acknowledge */
+    /** * 3. Atomic Database Sync and History Snapshot
+     */
     if (hasChanged) {
-        saveDatabaseToFile();
-        
-        /* Send confirmation to trigger the client-side green flash */
-        ws.send(JSON.stringify({
-            type: 'UPDATE_ACK',
-            nodeId: nodeId,
-            subModIdx: subModIdx,
-            success: true
-        }));
-        
-        console.log(`Node ${nodeId} updated and persisted.`);
-    }
-}
+        nodeData.lastSeen = Date.now(); 
 
-/**
- * Synchronizes the in-memory database to the local JSON file.
- */
-function saveDatabaseToFile() {
-    fs.writeFile('./can-node-database.json', JSON.stringify(canDatabase, null, 4), (err) => {
-        if (err) {
-            console.error('Failed to save database to disk:', err);
-        } else {
-            console.log('Database successfully persisted to disk.');
+        try {
+            /* Execute inventory update and history snapshot in a single synchronous transaction */
+            const updateTransaction = db.transaction((id, info) => {
+                // This updates the 'current' row
+                syncNodeToDatabase(id, info); 
+                // This inserts the 'historical' row
+                insertHistorySnapshot.run(
+                    id, info.nodeTypeMsg, info.subModCnt, info.config_crc, Date.now(), JSON.stringify(info.subModule)
+                );
+            });
+
+            updateTransaction(nodeId, nodeData);
+
+            ws.send(JSON.stringify({
+                type: 'UPDATE_ACK',
+                nodeId: nodeId,
+                subModIdx: subModIdx,
+                success: true
+            }));
+            
+            console.log(`Node ${nodeId} updated, archived, and ACK sent.`);
+        } catch (dbErr) {
+            console.error(`Database transaction failed for ${nodeId}:`, dbErr);
         }
-    });
+    }
 }
 
 /**
@@ -227,21 +359,11 @@ function saveDatabaseToFile() {
  * Bytes 4-7: Unix Timestamp in Seconds (Big Endian)
  */
 function getTimestampPayload() {
-    const TOTAL_PAYLOAD_SIZE = 8; /* Standard CAN frames are limited to 8 bytes */
-    const TIMESTAMP_OFFSET = 4;   /* Start writing timestamp at the 5th byte */
-    const MS_PER_SECOND = 1000;    /* Factor to convert milliseconds to seconds */
-
-    /**
-     * Buffer.alloc initializes the buffer with zeros by default. 
-     * This ensures bytes 0-3 are [0x00, 0x00, 0x00, 0x00].
-     */
-    const finalBuffer = Buffer.alloc(TOTAL_PAYLOAD_SIZE);
-
-    // Calculate Unix seconds
+    const finalBuffer = Buffer.alloc(CAN_STD_DLC);
     const unixSeconds = Math.floor(Date.now() / MS_PER_SECOND);
 
     // Write to the last 4 bytes (offset 4) in Big Endian
-    finalBuffer.writeUInt32BE(unixSeconds, TIMESTAMP_OFFSET);
+    finalBuffer.writeUInt32BE(unixSeconds, TS_PAYLOAD_OFFSET);
 
     return finalBuffer;
 }
@@ -290,7 +412,7 @@ function sendRequestIntro() {
 
 function handlePeroidicMessages() {
     if (Date.now() - lastReqIntro > maxReqIntro) {
-        saveDatabaseToFile(); /* write database to disk */
+        // saveDatabaseToFile(); /* write database to disk */
         sendRequestIntro(); /* initiate network scan */
     }
 
@@ -314,10 +436,15 @@ function sendAckMsg(msg) {
 
 }
 
+/**
+ * Converts a byte array to a hexadecimal string.
+ * @param {Uint8Array} byteArray - The byte array to be converted.
+ * @returns {string} A hexadecimal string representation of the input byte array.
+ */
 function toHexString(byteArray) {
-  return Array.from(byteArray, function(byte) {
-    return ('0' + (byte & 0xFF).toString(16)).slice(-2);
-  }).join('');
+    return Array.from(byteArray)
+        .map(byte => byte.toString(16).padStart(2, '0'))
+        .join('');
 }
 
 /**
@@ -354,35 +481,52 @@ function updateNodeDatabase(msg) {
 
     if (messageId >= INTRO_MSG_BEGIN && messageId <= INTRO_MSG_END) {
 
-        if (!canDatabase[nodeId]) {
-            console.log("Creating new record for node:", nodeString);
-            canDatabase[nodeId] = {
-                subModule: {} /* Create entry and sub-module array if it doesn't exist */
-            };
-        } else {
-            // console.log("Updating information for node:", nodeString);
-        }
-        
-        const myNode           = canDatabase[nodeId];
+        /* Check if this is a known node */
+        const isKnownNode = nodeString in canDatabase;
 
-        if (!myNode.firstSeen) {
-            /* only store firstSeen once, no updates */
-            myNode.firstSeen     = Date.now();
+        if (!isKnownNode) {
+            console.log("Creating new record for node:", nodeString);
+            /** create new node in the in-memory database */
+            canDatabase[nodeString] = { subModule: {} };
+            /** initialize sub-module index to 0 */ 
             myNode.lastSubModIdx = 0;
         }
+        
+        const myNode = canDatabase[nodeString];
+        
+        /* Capture the new CRC from the bus */
+        const incomingCrc = ((msg.data[CONFIGCRC_OFFSET] << SHIFT_BYTE) |
+                            (msg.data[CONFIGCRC_OFFSET + 1] & BYTE_MASK));
 
+        /** * CRC Change Detection Logic
+         * If we know this node and the CRC is different, archive the state.
+         */
+        const crcChanged = isKnownNode && myNode.configCrc !== undefined && myNode.configCrc !== incomingCrc;
+
+        if (crcChanged) {
+            console.warn(`CRC mismatch detected for node ${nodeString}: 0x${myNode.configCrc.toString(16)} -> 0x${incomingCrc.toString(16)}`);
+            /* Snapshot the current (old) state before we overwrite it with the new CRC data */
+            recordNodeSnapshot(nodeString, myNode);
+        }
+        
+
+        /* Update memory with the latest bus data */
         myNode.nodeId          = nodeString;
         myNode.lastSeen        = Date.now(); 
         myNode.nodeTypeMsg     = messageId;
         myNode.nodeTypeDlc     = INTRO_MSG_DLC;
         myNode.subModCnt       = msg.data[SUBMODCNT_OFFSET];
-        myNode.configCrc       = ((msg.data[CONFIGCRC_OFFSET] << 8) |
-                                  (msg.data[CONFIGCRC_OFFSET + 1] & 0xFF));
+        myNode.configCrc       = incomingCrc;
 
+        /** If this is the first time we've seen this nodeID record first-seen time */
+        if (!myNode.firstSeen) myNode.firstSeen = Date.now();
 
         if (myNode.lastSubModIdx >= (myNode.subModCnt - 1)) { /* sub module count is 0-indexed */
             /** Mark this interview as complete */
             myNode.introComplete = true;
+
+            /** Sync the in-memory state to SQLite */
+            syncNodeToDatabase(nodeString, myNode);
             // console.log("Node:", nodeString, "interview complete, not sending ack");
         } else {
             console.log("Node:", nodeString, "Sub-module count:", myNode.subModCnt, "CRC: ", myNode.configCrc);
@@ -400,14 +544,14 @@ function updateNodeDatabase(msg) {
         */
 
         /** Ensure the parent node exists before trying to add sub-modules */
-        if (!canDatabase[nodeId]) return;
+        if (!canDatabase[nodeString]) return;
 
         let subModIdx   = msg.data[SUBMODID_OFFSET];
         const workingIdx = (subModIdx & SUBMOD_PARTB_MASK); /* Get sub-module index */
         const messageStr = "0x" + messageId.toString(16).toUpperCase();
 
         try {/** Exit if sub-module interview is already complete */
-            if (canDatabase[nodeId].subModule[workingIdx].partAComplete && canDatabase[nodeId].subModule[workingIdx].partBComplete) {
+            if (canDatabase[nodeString].subModule[workingIdx].partAComplete && canDatabase[nodeString].subModule[workingIdx].partBComplete) {
                 console.log("Node", nodeString, "sub-module already interviewed:", workingIdx);
                 return;
             }} catch (error) {
@@ -426,13 +570,13 @@ function updateNodeDatabase(msg) {
         }
 
         /* Initialize sub-module entry and rawConfig array if missing */
-        if (!canDatabase[nodeId].subModule[subModIdx]) {
-             canDatabase[nodeId].subModule[subModIdx] = {
+        if (!canDatabase[nodeString].subModule[subModIdx]) {
+             canDatabase[nodeString].subModule[subModIdx] = {
                 rawConfig: new Array(3).fill(0) /* Pre-allocate for 3 config bytes */
             };
         }
         
-        const targetSub = canDatabase[nodeId].subModule[subModIdx];
+        const targetSub = canDatabase[nodeString].subModule[subModIdx];
         
         targetSub.subModIdx          = subModIdx;
         targetSub.lastSeen           = Date.now();
@@ -447,8 +591,8 @@ function updateNodeDatabase(msg) {
             // console.log("Node", nodeString, "sub-module", subModIdx, "part A complete");
         } else {                     /* Second introduction phase */
             /* Bitwise assembly for 16-bit Big Endian Data Message ID */
-            targetSub.dataMsgId      = (msg.data[SUBMOD_DATAMSGID_MSB_OFFSET] << 8) | 
-                                       (msg.data[SUBMOD_DATAMSGID_LSB_OFFSET] & 0xFF);
+            targetSub.dataMsgId      = (msg.data[SUBMOD_DATAMSGID_MSB_OFFSET] << SHIFT_BYTE) | 
+                                       (msg.data[SUBMOD_DATAMSGID_LSB_OFFSET] & BYTE_MASK);
             
             const byteSeven          = msg.data[SUBMOD_DATAMSGDLC_OFFSET];
             const { dlc, saveState } = unpackByteSeven(byteSeven);
@@ -461,8 +605,12 @@ function updateNodeDatabase(msg) {
         
         if (targetSub.partAComplete && targetSub.partBComplete) {
             /* store index last sub-module introduced for this node */
-            canDatabase[nodeId].lastSubModIdx = subModIdx; 
-            console.log("Node", nodeString, "sub-module", subModIdx, "interview complete");
+            canDatabase[nodeString].lastSubModIdx = subModIdx; 
+
+            /* Sync node to database */
+            syncNodeToDatabase(nodeString, canDatabase[nodeString]);
+
+            // console.log("Node", nodeString, "sub-module", subModIdx, "interview complete");
         } 
         sendAckMsg(msg); /**< Acknowledge the sub-module intro message */
     }
@@ -488,11 +636,12 @@ channel.addListener("onMessage", (msg) => {
         timestamp: Date.now()
     });
 
-    wss.clients.forEach((client) => {
-        if (client.readyState === 1) {
+    for (const client of wss.clients) {
+        const isSocketOpen = (client.readyState === 1); /* 1 is WebSocket.OPEN */
+        if (isSocketOpen) {
             client.send(payload);
         }
-    });
+    }
 });
 
 /* Start the CAN channel */
