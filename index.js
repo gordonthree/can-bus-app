@@ -8,7 +8,40 @@ import * as CAN_MSG from './can_constants.js';
 import console from 'console';
 import Database from 'better-sqlite3';
 
+
 /* === Constants === */
+
+/* === CSV Import Constants === */
+
+/** Number of rows to skip (5 spacer lines + 1 header line) */
+const CSV_HEADER_OFFSET = 6;
+
+/** Minimum number of columns required for a valid message definition row */
+const CSV_MIN_COLUMN_COUNT = 16;
+
+/** Column index for the Message Category (e.g., 'canerr') */
+const CSV_COL_CATEGORY = 1;
+
+/** Column index for the Hexadecimal Message ID (e.g., '0x100') */
+const CSV_COL_ID_HEX = 3;
+
+/** Column index for the Data Length Code (DLC) */
+const CSV_COL_DLC = 4;
+
+/** Column index for the human-readable constant name (c def) */
+const CSV_COL_NAME = 14;
+
+/** Column index for the detailed message description (Comments) */
+const CSV_COL_DESCRIPTION = 15;
+
+/** Base 16 for hexadecimal string parsing */
+const HEX_BASE = 16;
+
+/** Default CAN Data Length Code if column is empty or invalid */
+const DEFAULT_DLC = 8;
+
+/** Memory cache for high-speed message name lookups */
+const messageLookup = new Map();
 
 /** Standard port for web traffic */
 const HTTP_PORT = 3000;
@@ -258,6 +291,15 @@ db.exec(`
         updated_at INTEGER,
         FOREIGN KEY(audit_id) REFERENCES audit_log(id)
     );
+
+    CREATE TABLE IF NOT EXISTS message_definitions (
+        id_dec INTEGER PRIMARY KEY,
+        id_hex TEXT,
+        name TEXT,
+        dlc INTEGER,
+        category TEXT,
+        description TEXT
+    );
 `);
 
 /** Fetch 20 most recent audits joined with their comments */
@@ -302,6 +344,57 @@ const insertHistorySnapshot = db.prepare(`
 `);
 
 /* === Functions === */
+
+/**
+ * Imports message definitions from the Google Sheets CSV.
+ * Handles the multi-line header and specific column mapping of the source file.
+ * @param {string} filePath - Path to the source CSV file.
+ */
+function importMessageDefinitions(filePath) {
+    try {
+        const data = fs.readFileSync(filePath, 'utf8');
+        const lines = data.split(/\r?\n/);
+        
+        /** Skip the metadata and header rows to reach raw data */
+        const dataLines = lines.slice(CSV_HEADER_OFFSET);
+
+        const insertStmt = db.prepare(`
+            INSERT OR REPLACE INTO message_definitions (id_dec, id_hex, name, dlc, category, description)
+            VALUES (?, ?, ?, ?, ?, ?)
+        `);
+
+        db.transaction(() => {
+            for (const line of dataLines) {
+                const cols = line.split(',');
+
+                /** Verify the row has sufficient columns and a valid Hex ID prefix */
+                const isValidRow = cols.length >= CSV_MIN_COLUMN_COUNT && 
+                                   cols[CSV_COL_ID_HEX] && 
+                                   cols[CSV_COL_ID_HEX].startsWith('0x');
+
+                if (isValidRow) {
+                    const idHex    = cols[CSV_COL_ID_HEX].trim();
+                    const idDec    = parseInt(idHex, HEX_BASE);
+                    const name     = cols[CSV_COL_NAME].trim();
+                    const dlc      = parseInt(cols[CSV_COL_DLC]) || DEFAULT_DLC;
+                    const category = cols[CSV_COL_CATEGORY].trim();
+                    const desc     = cols[CSV_COL_DESCRIPTION].trim();
+
+                    if (!isNaN(idDec)) {
+                        insertStmt.run(idDec, idHex, name, dlc, category, desc);
+                        
+                        /** Update memory cache for O(1) lookup during live CAN feed */
+                        messageLookup.set(idDec, name);
+                    }
+                }
+            }
+        })();
+
+        console.log(`Imported ${messageLookup.size} message definitions from CSV.`);
+    } catch (err) {
+        console.error("Failed to import message definitions:", err.message);
+    }
+}
 
 /**
  * Broadcasts the 20 most recent audit logs to all connected clients.
@@ -750,21 +843,26 @@ channel.addListener("onMessage", (msg) => {
     /* Send "request intro" and timestamp messages periodically */
     handlePeroidicMessages();
 
-    /* Broadcast to WebSockets as before */
+    /** * Decorate the payload with the human-readable name 
+     * sourced from the database lookup.
+     */
     const payload = JSON.stringify({
-        type: 'CAN_MESSAGE', // Added type to distinguish from database
+        type: 'CAN_MESSAGE',
         id: msg.id,
+        name: messageLookup.get(msg.id) || 'UNKNOWN',
         data: [...msg.data],
         timestamp: Date.now()
     });
 
     for (const client of wss.clients) {
-        const isSocketOpen = (client.readyState === 1); /* 1 is WebSocket.OPEN */
-        if (isSocketOpen) {
+        if (client.readyState === client.OPEN) {
             client.send(payload);
         }
     }
 });
 
-/* Start the CAN channel */
+/** Start the CAN channel */
 channel.start();
+
+/** Initialize definitions on startup */
+importMessageDefinitions('./can bus messages - Messages.csv');
