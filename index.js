@@ -4,52 +4,136 @@ import http from 'http';
 import fs from 'fs';
 import path from 'path';
 
-/* === Constants === */
-const HTTP_PORT                       = 3000; // Standard port for web traffic
-const WS_PORT                         = 8080;   // Port for CAN data stream
-const CAN_STD_DLC                     = 8;  // Standard CAN frame data length
-const myNodeId                        = [0x19, 0x00, 0x00, 0x19]; /* Four byte Node ID for the master */
-const NODE_ID_OFFSET                  = 0; /**< Offset of Node ID in "intro" messages */
-const TS_PAYLOAD_OFFSET               = 4; /**< Offset of timestamp payload in "intro" messages */
-const NODE_ID_BYTE_LENGTH             = 4; /**< Number of bytes in a Node ID */
-const INTRO_MSG_DLC                   = 8; /**< Data length for "intro" messages */
-const SUBMODCNT_OFFSET                = 4; /**< Offset of sub-module count in "intro" messages */
-const CONFIGCRC_OFFSET                = 5; /**< Offset of node configuration CRC in "intro" messages */
-const INTRO_MSG_BEGIN                 = 0x780; /**< Beginning of module (node) "intro" messages */
-const INTRO_MSG_END                   = 0x7FF; /**< End of module (node) "intro" messages */
-const SUBMOD_INTRO_BEGIN              = 0x700; /**< Beginning of sub-module "intro" messages */
-const SUBMOD_INTRO_END                = 0x77F; /**< End of sub-module "intro" messages */
-const SUBMODID_OFFSET                 = 4; /**< Offset of sub-module ID in "intro" messages */
-const NODE_MAX_SUBMODS                = 8; /**< Maximum number of sub-modules per node */
-const SUBMOD_PARTB_OFFSET             = 0x80; /**< Offset of sub-module part B in "intro" messages */
-const SUBMOD_PARTB_MASK               = 0x7F; /**< Mask for sub-module part B in "intro" messages */
-const SUBMOD_RAW0_OFFSET              = 5; /**< First of three raw config bytes for sub-module */
-const SUBMOD_RAW1_OFFSET              = 6; /**< Second of three raw config bytes for sub-module */
-const SUBMOD_RAW2_OFFSET              = 7; /**< Third of three raw config bytes for sub-module */
-const SUBMOD_DATAMSGID_MSB_OFFSET     = 5; /**< Offset of data message ID MSB in "intro" messages */
-const SUBMOD_DATAMSGID_LSB_OFFSET     = 6; /**< Offset of data message ID LSB in "intro" messages */
-const SUBMOD_DATAMSGDLC_OFFSET        = 7; /**< Offset of data message DLC in "intro" messages */
-const HEARTBEAT_INTERVAL              = 30000; /**< Check every 30 seconds */
-const MS_PER_SECOND                   = 1000;  /* Factor to convert milliseconds to seconds */
-const SHIFT_BYTE                      = 8; /* Shift for byte operations */
-const BYTE_MASK                       = 0xFF; /* Mask for byte operations */
-
-/* In-memory database for CAN messages */
-const canDatabase                     = {};
-
-/* Counters for perodic messages */
-const maxReqIntro                     = 1800000; /**< Maximum interval between "request intro" messages */
-const sendTsInterval                  = 10000; /**< Milliseconds between sending timestamp messages */
-let lastReqIntro                      = 0; /**< Timestamp of last "request intro" message */
-let lastTsMsg                         = 0; /**< Timestamp of last "timestamp" message */
-
-/* Import constants from can_constants.js */
-import * as CAN_MSG from './can_constants.js'
+import * as CAN_MSG from './can_constants.js';
 import console from 'console';
-
-/* Simple SQLite database for tracking CAN modules and messages */
 import Database from 'better-sqlite3';
+
+/* === Constants === */
+
+/** Standard port for web traffic */
+const HTTP_PORT = 3000;
+
+/** Port for CAN data stream */
+const WS_PORT = 8080;
+
+/** Standard CAN frame data length */
+const CAN_STD_DLC = 8;
+
+/** First CAN Arbitration ID used in this project */
+const CAN_FIRST_MSG = 0x100;
+
+/** Last CAN Arbitration ID used in this project */
+const CAN_LAST_MSG = 0x7FF;
+
+/** Four byte Node ID for the master */
+const myNodeId = [0x19, 0x00, 0x00, 0x19];
+
+/** Offset of Node ID in CAN messages */
+const NODE_ID_OFFSET = 0;
+
+/** Offset of timestamp payload in intro messages */
+const TS_PAYLOAD_OFFSET = 4;
+
+/** Number of bytes in a Node ID */
+const NODE_ID_BYTE_LENGTH = 4;
+
+/** Data length for intro messages */
+const INTRO_MSG_DLC = 8;
+
+/** Offset of sub-module count in intro messages */
+const SUBMODCNT_OFFSET = 4;
+
+/** Offset of node configuration CRC in intro messages */
+const CONFIGCRC_OFFSET = 5;
+
+/** Beginning of module (node) intro messages */
+const INTRO_MSG_BEGIN = 0x780;
+
+/** End of module (node) intro messages */
+const INTRO_MSG_END = 0x7FF;
+
+/** Beginning of sub-module intro messages */
+const SUBMOD_INTRO_BEGIN = 0x700;
+
+/** End of sub-module intro messages */
+const SUBMOD_INTRO_END = 0x77F;
+
+/** Offset of sub-module ID in intro messages */
+const SUBMODID_OFFSET = 4;
+
+/** Maximum number of sub-modules per node */
+const NODE_MAX_SUBMODS = 8;
+
+/** Offset of sub-module part B in intro messages */
+const SUBMOD_PARTB_OFFSET = 0x80;
+
+/** Mask for sub-module part B in intro messages */
+const SUBMOD_PARTB_MASK = 0x7F;
+
+/** First of three raw config bytes for sub-module */
+const SUBMOD_RAW0_OFFSET = 5;
+
+/** Second of three raw config bytes for sub-module */
+const SUBMOD_RAW1_OFFSET = 6;
+
+/** Third of three raw config bytes for sub-module */
+const SUBMOD_RAW2_OFFSET = 7;
+
+/** Number of raw config bytes */
+const SUBMOD_RAW_CFG_BYTES = 3;
+
+/** Offset of data message ID MSB in intro messages */
+const SUBMOD_DATAMSGID_MSB_OFFSET = 5;
+
+/** Offset of data message ID LSB in intro messages */
+const SUBMOD_DATAMSGID_LSB_OFFSET = 6;
+
+/** Offset of data message DLC in intro messages */
+const SUBMOD_DATAMSGDLC_OFFSET = 7;
+
+/** Check every 30 seconds for socket liveness */
+const HEARTBEAT_INTERVAL = 30000;
+
+/** Factor to convert milliseconds to seconds */
+const MS_PER_SECOND = 1000;
+
+/** Bit shift for byte operations */
+const SHIFT_BYTE = 8;
+
+/** Mask for byte operations */
+const BYTE_MASK = 0xFF;
+
+/** Mask for the lower 4 bits to extract DLC */
+const CAN_DLC_MASK = 0x0F;
+
+/** Length for hex string padding */
+const HEX_PAD_LENGTH = 2;
+
+/** Maximum interval between "request intro" messages (30 minutes) */
+const maxReqIntro = 1800000;
+
+/** Milliseconds between sending timestamp messages */
+const sendTsInterval = 10000;
+
+/* === State and Initialization === */
+
+/** In-memory database for CAN messages */
+const canDatabase = {};
+
+/** Timestamp of last "request intro" message */
+let lastReqIntro = 0;
+
+/** Timestamp of last "timestamp" message */
+let lastTsMsg = 0;
+
+/** SQLite database for tracking CAN modules and messages */
 const db = new Database('can_management.db');
+
+/** WebSocket Server */
+const wss = new WebSocketServer({ port: WS_PORT });
+
+/** CAN Bus Setup */
+const channel = can.createRawChannel("can0", true);
 
 /* === Setup === */
 
@@ -82,18 +166,14 @@ const server = http.createServer((req, res) => {
         }
         return;
     });
-
 });
 
 server.listen(HTTP_PORT, () => {
     console.log(`Web UI available at http://cancontrol:${HTTP_PORT}`);
 });
 
-// 2. WebSocket Server
-const wss = new WebSocketServer({ port: WS_PORT });
-
 wss.on('connection', (ws) => {
-/** * Set initial liveness for the heartbeat cleanup logic */
+    /** Set initial liveness for the heartbeat cleanup logic */
     ws.isAlive = true;
     ws.on('pong', () => { ws.isAlive = true; });
 
@@ -101,11 +181,11 @@ wss.on('connection', (ws) => {
     /** * Verify the socket is open before sending. 
      * WebSocket.OPEN (value 1) ensures the connection is ready.
      */
-    if (ws.readyState === 1) { // 1 represents WebSocket.OPEN
+    if (ws.readyState === ws.OPEN) { 
         console.log('Client connected, sending live in-memory node database...');
         ws.send(JSON.stringify({
             type: 'DATABASE_UPDATE',
-            payload: canDatabase /**< Reference to the live in-memory object */
+            payload: canDatabase /* Reference to the live in-memory object */
         }));
     }
 
@@ -130,11 +210,7 @@ wss.on('connection', (ws) => {
 
 wss.on('close', () => clearInterval(interval));
 
-// 3. CAN Bus Setup
-const channel = can.createRawChannel("can0", true);
-
-// 4. Database setup
-/**
+/** * Database setup
  * Initialize SQLite tables. 
  * 'better-sqlite3' executes these synchronously on startup.
  */
@@ -377,7 +453,7 @@ function writeCanMessageBE(id, dataArray) {
     const buffer = Buffer.alloc(CAN_STD_DLC); // Standard CAN frame size is 8 bytes
 
     dataArray.forEach((value, index) => {
-        if (index < 8) {
+        if (index < CAN_STD_DLC) {
             buffer.writeUInt8(value, index);
         }
     });
@@ -391,18 +467,13 @@ function getNodeId(msg) {
         return myNodeId; /* something wrong with the message data, return my Node ID */
     } 
     const nodeId = new Uint8Array([msg.data[0], msg.data[1], msg.data[2], msg.data[3]]);
-    // console.log(nodeId);
     return nodeId;
 }
 
 function getMsgId(msg) {
-    if (msg.id >= 0x100 && msg.in <= 0x7FF) {
-        /* return a valid message ID */
-        return msg.id;
-    }
-
-    return null; /* invalid message ID */
+    if (msg.id >= CAN_FIRST_MSG && msg.in <= CAN_LAST_MSG) return msg.id;
     
+    return null; /* invalid message ID */
 }
 
 function sendRequestIntro() {
@@ -426,14 +497,13 @@ function sendAckMsg(msg) {
     const messageId = getMsgId(msg);
 
     /* Ensure the message has enough data to extract a Node ID, and that we received an intro message */
-    if ((msg.data.length < NODE_ID_BYTE_LENGTH) && !(messageId >= 0x700 && messageId <= 0x7FF)) {
+    if ((msg.data.length < NODE_ID_BYTE_LENGTH) && !(messageId >= SUBMOD_INTRO_BEGIN && messageId <= INTRO_MSG_END)) {
         return;
     }
 
     const nodeId = getNodeId(msg);
 
     writeCanMessageBE(CAN_MSG.ACK_INTRO_ID, nodeId);
-
 }
 
 /**
@@ -453,7 +523,7 @@ function toHexString(byteArray) {
  */
 function unpackByteSeven(byteValue) {
     // 0x0F (binary 00001111) masks the lower 4 bits to get the DLC
-    const dlc = byteValue & 0x0F; 
+    const dlc = byteValue & CAN_DLC_MASK; 
 
     // We check if the bit corresponding to SUBMOD_PART_B_FLAG is set.
     // Assuming SUBMOD_PART_B_FLAG is 0x80 (10000000) or 0x10 (00010000).
@@ -474,8 +544,8 @@ function updateNodeDatabase(msg) {
         return;
     }
     
-    const messageId = msg.id;
-    const nodeId    = getNodeId(msg);
+    const messageId  = msg.id;
+    const nodeId     = getNodeId(msg);
     const nodeString = toHexString(nodeId);
     // console.log("Received message from node: ", nodeString, "0x" + messageId.toString(16).toUpperCase());
 
@@ -487,9 +557,10 @@ function updateNodeDatabase(msg) {
         if (!isKnownNode) {
             console.log("Creating new record for node:", nodeString);
             /** create new node in the in-memory database */
-            canDatabase[nodeString] = { subModule: {} };
-            /** initialize sub-module index to 0 */ 
-            myNode.lastSubModIdx = 0;
+            canDatabase[nodeString] = { 
+                                        subModule:     {}, /* empty sub-module array */
+                                        lastSubModIdx: 0   /* start with index 0 */
+                                      };
         }
         
         const myNode = canDatabase[nodeString];
@@ -530,7 +601,8 @@ function updateNodeDatabase(msg) {
             // console.log("Node:", nodeString, "interview complete, not sending ack");
         } else {
             console.log("Node:", nodeString, "Sub-module count:", myNode.subModCnt, "CRC: ", myNode.configCrc);
-            sendAckMsg(msg); /**< Acknowledge the intro message */
+            /** Acknowledge the intro message */
+            sendAckMsg(msg); 
         }
 
     } else if (messageId >= SUBMOD_INTRO_BEGIN && messageId <= SUBMOD_INTRO_END) {
@@ -572,7 +644,7 @@ function updateNodeDatabase(msg) {
         /* Initialize sub-module entry and rawConfig array if missing */
         if (!canDatabase[nodeString].subModule[subModIdx]) {
              canDatabase[nodeString].subModule[subModIdx] = {
-                rawConfig: new Array(3).fill(0) /* Pre-allocate for 3 config bytes */
+                rawConfig: new Array(SUBMOD_RAW_CFG_BYTES).fill(0) /* Pre-allocate for 3 config bytes */
             };
         }
         
