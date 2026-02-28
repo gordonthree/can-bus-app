@@ -216,10 +216,17 @@ wss.on('connection', (ws) => {
      */
     if (ws.readyState === ws.OPEN) { 
         console.log('Client connected, sending live in-memory node database...');
+        /** 1. Send Message Definitions first so UI can map names */
+        ws.send(JSON.stringify({
+            type: 'DEFINITIONS_LIST',
+            payload: selectAllDefinitions.all()
+        }));
+        
         ws.send(JSON.stringify({
             type: 'DATABASE_UPDATE',
             payload: canDatabase /* Reference to the live in-memory object */
         }));
+    
         broadcastAuditLog();
     }
 
@@ -237,6 +244,38 @@ wss.on('connection', (ws) => {
                     broadcastAuditLog(); /**< Refresh all clients with the new comment */
                     break;
                 /* Add other message types here as needed */
+                case 'GET_DEFINITIONS':
+                    ws.send(JSON.stringify({
+                        type: 'DEFINITIONS_LIST',
+                        payload: selectAllDefinitions.all()
+                    }));
+                    break;
+                case 'REQUEST_NODE_INTERVIEW':
+                    if (request.nodeId) {
+                        const nodeString = request.nodeId;
+                        
+                        /** * Documentation-First Cleanup:
+                         * Reset the in-memory state so the engine re-ingests all frames.
+                         */
+                        if (canDatabase[nodeString]) {
+                            console.log(`Resetting inventory for ${nodeString} before re-interview...`);
+                            
+                            /** Clear sub-modules and reset tracking indices */
+                            canDatabase[nodeString].subModule     = {};
+                            canDatabase[nodeString].lastSubModIdx = 0;
+                            canDatabase[nodeString].introComplete = false;
+                        }
+
+                        /** Broadcast the cleared state to all clients so the UI updates immediately */
+                        broadcastDatabase();
+
+                        /** Construct and send the CAN command */
+                        const targetNodeId = hexStringToByteArray(nodeString);
+                        writeCanMessageBE(CAN_MSG.REQ_NODE_INTRO_ID, targetNodeId);
+                        
+                        console.log(`Sent REQ_NODE_INTRO (0x401) to node: ${nodeString}`);
+                    }
+                    break;
                 default:
                     console.warn(`Unknown message type: ${request.type}`);
             }
@@ -337,6 +376,13 @@ const insertAudit = db.prepare(`
     VALUES (?, ?, ?, ?, ?)
 `);
 
+/** Fetch all definitions for the UI dropdowns */
+const selectAllDefinitions = db.prepare(`
+    SELECT id_dec, id_hex, name, category, description 
+    FROM message_definitions 
+    ORDER BY id_dec ASC
+`);
+
 /** * Prepared statement for snapshots */
 const insertHistorySnapshot = db.prepare(`
     INSERT INTO node_history (node_id, node_type_msg, sub_mod_cnt, config_crc, recorded_at, full_data)
@@ -344,6 +390,25 @@ const insertHistorySnapshot = db.prepare(`
 `);
 
 /* === Functions === */
+
+/**
+ * Broadcasts the current in-memory CAN database to all connected clients.
+ * This is used to refresh the UI when a node is added, updated, or reset.
+ */
+function broadcastDatabase() {
+    const payload = JSON.stringify({
+        type: 'DATABASE_UPDATE',
+        payload: canDatabase
+    });
+
+    for (const client of wss.clients) {
+        /** 1 is WebSocket.OPEN */
+        const isSocketOpen = (client.readyState === 1); 
+        if (isSocketOpen) {
+            client.send(payload);
+        }
+    }
+}
 
 /**
  * Imports message definitions from the Google Sheets CSV.
@@ -831,6 +896,21 @@ function updateNodeDatabase(msg) {
     }
 }
 
+/**
+ * Converts a hex string into an array of bytes.
+ * Used for preparing Node IDs for CAN transmission.
+ * @param {string} hexString - The hex string (e.g., "19000019").
+ * @returns {number[]} Array of byte values.
+ */
+function hexStringToByteArray(hexString) {
+    const bytes = [];
+    const HEX_STEP = 2; /**< Two characters per byte */
+    
+    for (let i = 0; i < hexString.length; i += HEX_STEP) {
+        bytes.push(parseInt(hexString.substr(i, HEX_STEP), 16));
+    }
+    return bytes;
+}
 
 /* === Listeners === */
 

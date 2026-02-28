@@ -119,6 +119,30 @@
             border-bottom: 1px solid #333; /* Visual separation for sub-rows */
         }
 
+        /* Container for personality-specific labels */
+        .label-row {
+            grid-column: 1 / -1; /* Span full width of the grid */
+            display: flex;
+            justify-content: flex-end;
+            gap: 15px;
+            font-size: 0.75rem;
+            color: var(--accent);
+            padding-right: 100px;
+        }
+
+        .config-label {
+            opacity: 0.8;
+            font-style: italic;
+        }
+
+        /* Ensure select boxes match your dark theme */
+        select.cell-input {
+            background-color: #252526;
+            color: var(--text);
+            border: none;
+            width: 100%;
+        }
+        
         /* 
          * When expanded, change from 'none' to 'block' or 'grid-cell' behavior.
          * Since they are direct children of a display:grid container, 

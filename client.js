@@ -6,7 +6,9 @@ let container;
 let statusDiv;
 let filterInput;
 let filterDisplay;
+let allDefinitions = [];
 
+/** Set of active filters */
 const activeFilters   = new Set();
 /** Wait 5 seconds before reconnecting */
 const RETRY_DELAY     = 5000; 
@@ -19,6 +21,20 @@ const HEX_BASE = 16;
 /** Offset for headers (first 4 divs) */
 const HEADER_COUNT = 4; 
 const MAX_ROWS = 20;
+
+/** * Mapping of Sub-Module personalities to their configuration labels.
+ * Derived from the subModule_t C struct.
+ */
+const PERSONALITY_MAP = {
+    0x438: ["Output Pin", "Blink Delay (100ms)", "Strobe Pattern"],
+    0x439: ["Strip/Pin Index", "Color Index", "Configuration Index"], // Combined Analog/ARGB logic
+    0x43B: ["Input Pin", "Resistor (PU/PD)", "Inversion (H/L)"],
+    0x43C: ["Output Pin", "Momentary Dur (10ms)", "Output Mode"],
+    0x43D: ["Input Pin", "Oversample (High)", "Oversample (Low)"], // 16-bit split
+    0x43E: ["Output Pin", "Output Mode", "Reserved"],
+    0x43F: ["Output Pin", "PWM Freq (100Hz)", "Inversion (H/L)"]
+};
+
 
 document.addEventListener('DOMContentLoaded', () => {
     // Initialize elements after DOM is ready
@@ -43,16 +59,28 @@ document.addEventListener('DOMContentLoaded', () => {
 
         /** Route message based on the 'type' property. */
         switch (message.type) {
-            case 'DATABASE_UPDATE':
-                renderNodeDatabase(message.payload);
+            case 'DEFINITIONS_LIST':
+                allDefinitions = message.payload;
+                /** Populate a global Map for O(1) UI lookups */
+                window.definitionsMap = new Map(allDefinitions.map(d => [d.id_dec, d]));
+                console.log(`Definitions cached: ${allDefinitions.length} entries.`);
                 break;
 
-            case 'UPDATE_ACK':
-                handleSaveConfirmation(message.nodeId, message.subModIdx);
+            case 'DATABASE_UPDATE':
+                /** * We don't render until we have definitions to ensure 
+                 * dropdowns and labels have the data they need.
+                 */
+                if (allDefinitions.length > 0) {
+                    renderNodeDatabase(message.payload);
+                }
                 break;
 
             case 'AUDIT_LOG_UPDATE':
                 renderAuditLog(message.payload);
+                break;
+
+            case 'UPDATE_ACK':
+                handleSaveConfirmation(message.nodeId, message.subModIdx);
                 break;
 
             case 'CAN_MESSAGE':
@@ -176,6 +204,30 @@ function renderAuditLog(logs) {
             container.appendChild(div);
         });
     });
+}
+
+/**
+ * Updates the labels for the configuration bytes based on the selected personality ID.
+ */
+function updateConfigLabels(nodeId, subIdx, personalityId) {
+    const labels = PERSONALITY_MAP[personalityId] || ["Raw Byte 0", "Raw Byte 1", "Raw Byte 2"];
+    const labelContainer = document.getElementById(`labels-${nodeId}-${subIdx}`);
+    if (labelContainer) {
+        labelContainer.innerHTML = labels.map(l => `<span class="config-label">${l}</span>`).join('');
+    }
+}
+
+/**
+ * Triggers a full node re-interview.
+ * @param {string} nodeId - Hex string representation of the Node ID.
+ */
+function requestNodeInterview(nodeId) {
+    if (confirm(`Are you sure you want to re-interview node ${nodeId}? Any unsaved config will be cleared.`)) {
+        socket.send(JSON.stringify({
+            type: 'REQUEST_NODE_INTERVIEW',
+            nodeId: nodeId
+        }));
+    }
 }
 
 /**
@@ -324,7 +376,7 @@ function renderNodeDatabase(db) {
         const parentCells = [
             // Change the button HTML string to include 'event'
             { html: `<button class="compact-btn" title="Toggle Sub-module Display" onclick="toggleSubModules(event, '${nodeId}')">+</button>
-                     <button class="compact-btn" title="re-Interview Node" onclick="interviewNode('${nodeId}')">I</button>
+                     <button class="compact-btn" title="re-Interview Node" onclick="requestNodeInterview('${nodeId}')">I</button>
                      <button class="compact-btn" title="Remove From Database" onclick="eraseNode('${nodeId}')">X</button>
                      <button class="compact-btn" title="Send CAN Command" onclick="commandNode('${nodeId}')">C</button>`,
                     class: 'node-parent'
