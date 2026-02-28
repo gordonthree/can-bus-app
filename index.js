@@ -9,6 +9,7 @@ const HTTP_PORT                       = 3000; // Standard port for web traffic
 const WS_PORT                         = 8080;   // Port for CAN data stream
 const CAN_STD_DLC                     = 8;  // Standard CAN frame data length
 const myNodeId                        = [0x19, 0x00, 0x00, 0x19]; /* Four byte Node ID for the master */
+const NODE_ID_OFFSET                  = 0; /**< Offset of Node ID in "intro" messages */
 const NODE_ID_BYTE_LENGTH             = 4; /**< Number of bytes in a Node ID */
 const INTRO_MSG_DLC                   = 8; /**< Data length for "intro" messages */
 const SUBMODCNT_OFFSET                = 4; /**< Offset of sub-module count in "intro" messages */
@@ -87,12 +88,12 @@ wss.on('connection', (ws) => {
     ws.isAlive = true;
     ws.on('pong', () => { ws.isAlive = true; });
 
-    console.log('Client connected, sending live in-memory node database...');
     
     /** * Verify the socket is open before sending. 
      * WebSocket.OPEN (value 1) ensures the connection is ready.
      */
     if (ws.readyState === 1) { // 1 represents WebSocket.OPEN
+        console.log('Client connected, sending live in-memory node database...');
         ws.send(JSON.stringify({
             type: 'DATABASE_UPDATE',
             payload: canDatabase /**< Reference to the live in-memory object */
@@ -103,32 +104,17 @@ wss.on('connection', (ws) => {
         try {
             const request = JSON.parse(message);
 
-            if (request.type === 'UPDATE_NODE_CONFIG') {
-                const { nodeId, subModIdx, dataMsgId, rawConfig, dataMsgDlc } = request;
-
-                /** * The database uses comma-separated keys (e.g., "59,105,134,176").
-                 * We find the entry where the .nodeId property matches the request.
-                 */
-                const dbKey = Object.keys(canDatabase).find(
-                    key => canDatabase[key].nodeId === nodeId
-                );
-
-                if (dbKey && canDatabase[dbKey].subModule[subModIdx]) {
-                    const targetSub = canDatabase[dbKey].subModule[subModIdx];
-
-                    // Update the in-memory object
-                    targetSub.dataMsgId = dataMsgId;
-                    targetSub.rawConfig = rawConfig;
-                    targetSub.dataMsgDlc = dataMsgDlc;
-
-                    console.log(`Updated Node ${nodeId} Sub ${subModIdx}: MsgId 0x${dataMsgId.toString(16).toUpperCase()}`);
-                    
-                    /* Optional: Persist to disk immediately */
-                    // saveDatabaseToFile();
-                }
+            switch (request.type) {
+                case 'UPDATE_NODE_CONFIG':
+                    handleNodeConfigUpdate(ws, request);
+                    break;
+                
+                /* Add other message types here as needed */
+                default:
+                    console.warn(`Unknown message type: ${request.type}`);
             }
         } catch (err) {
-            console.error('Error processing WebSocket message:', err);
+            console.error('Failed to parse WebSocket message:', err);
         }
     });
 });
@@ -140,6 +126,100 @@ const channel = can.createRawChannel("can0", true);
 
 /* === Functions === */
 
+/**
+ * Processes configuration updates, sends CAN messages on changes, and ACKs the client.
+ * @param {WebSocket} ws - The specific client connection to respond to.
+ * @param {Object} data - The payload containing nodeId, subModIdx, etc.
+ */
+function handleNodeConfigUpdate(ws, data) {
+    const { nodeId, subModIdx, dataMsgId, rawConfig, dataMsgDlc } = data;
+
+    /* Locate the node in the in-memory database */
+    const dbKey = Object.keys(canDatabase).find(key => canDatabase[key].nodeId === nodeId);
+    if (!dbKey || !canDatabase[dbKey].subModule[subModIdx]) {
+        console.error(`Update failed: Node ${nodeId} Sub ${subModIdx} not found.`);
+        return;
+    }
+
+    const targetSub = canDatabase[dbKey].subModule[subModIdx];
+    let hasChanged = false;
+
+    /** * 1. Check for ID/DLC changes and send CAN message 
+     */
+    if (targetSub.dataMsgId !== dataMsgId || targetSub.dataMsgDlc !== dataMsgDlc) {
+        
+        const canPayload = Buffer.alloc(CAN_MSG.CFG_SUB_DATA_MSG_DLC);
+        
+        /* Bytes 0-3: Node ID (4 bytes) */
+        Buffer.from(nodeId, 'hex').copy(canPayload, NODE_ID_OFFSET); 
+        
+        /* Byte 4: Sub-module Index */
+        canPayload.writeUInt8(subModIdx, SUBMODID_OFFSET);      
+        
+        /* Bytes 5-6: Data Message ID (2 bytes, Big Endian) */
+        canPayload.writeUInt16BE(dataMsgId, SUBMOD_DATAMSGID_MSB_OFFSET);   
+        
+        /* Byte 7: Data Message DLC */
+        canPayload.writeUInt8(dataMsgDlc, SUBMOD_DATAMSGDLC_OFFSET);     
+
+        /* Send to the CAN bus via the established channel */
+        channel.send({ id: CAN_MSG.CFG_SUB_DATA_MSG_ID, data: canPayload });
+        
+        targetSub.dataMsgId  = dataMsgId;
+        targetSub.dataMsgDlc = dataMsgDlc;
+        hasChanged = true;
+    }
+
+    /** * 2. Check for Raw Config changes (comparison via stringification)
+     */
+    if (JSON.stringify(targetSub.rawConfig) !== JSON.stringify(rawConfig)) {
+        
+        const canPayload = Buffer.alloc(CAN_MSG.CFG_SUB_RAW_DATA_DLC);
+        
+        /* Bytes 0-3: Node ID (4 bytes) */
+        Buffer.from(nodeId, 'hex').copy(canPayload, NODE_ID_OFFSET); 
+
+        /* Byte 4: Sub-module Index */
+        canPayload.writeUInt8(subModIdx, SUBMODID_OFFSET);
+
+        /* Byte 5-7: Raw config (3 bytes) */
+        Buffer.from(rawConfig, 'hex').copy(canPayload, SUBMOD_RAW0_OFFSET);
+        
+        /* Send to the CAN bus via the established channel */
+        channel.send({ id: CAN_MSG.CFG_SUB_RAW_DATA_ID, data: canPayload });
+        
+        targetSub.rawConfig = rawConfig;
+        hasChanged = true;
+    }
+
+    /* 3. Persist and Acknowledge */
+    if (hasChanged) {
+        saveDatabaseToFile();
+        
+        /* Send confirmation to trigger the client-side green flash */
+        ws.send(JSON.stringify({
+            type: 'UPDATE_ACK',
+            nodeId: nodeId,
+            subModIdx: subModIdx,
+            success: true
+        }));
+        
+        console.log(`Node ${nodeId} updated and persisted.`);
+    }
+}
+
+/**
+ * Synchronizes the in-memory database to the local JSON file.
+ */
+function saveDatabaseToFile() {
+    fs.writeFile('./can-node-database.json', JSON.stringify(canDatabase, null, 4), (err) => {
+        if (err) {
+            console.error('Failed to save database to disk:', err);
+        } else {
+            console.log('Database successfully persisted to disk.');
+        }
+    });
+}
 
 /**
  * Constructs an 8-byte CAN payload:
@@ -210,7 +290,8 @@ function sendRequestIntro() {
 
 function handlePeroidicMessages() {
     if (Date.now() - lastReqIntro > maxReqIntro) {
-        sendRequestIntro();
+        saveDatabaseToFile(); /* write database to disk */
+        sendRequestIntro(); /* initiate network scan */
     }
 
     if (Date.now() - lastTsMsg > sendTsInterval) {

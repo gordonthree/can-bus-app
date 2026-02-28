@@ -40,6 +40,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // Route message based on the 'type' property
     if (message.type === 'DATABASE_UPDATE') {
         renderNodeDatabase(message.payload);
+    } else if (message.type === 'UPDATE_ACK') {
+        handleSaveConfirmation(message.nodeId, message.subModIdx);
     } else if (message.type === 'CAN_MESSAGE' || (!message.type && message.id)) {
         /* Support both old and new payload formats for compatibility */
         processLiveCanFrame(message);
@@ -47,16 +49,39 @@ document.addEventListener('DOMContentLoaded', () => {
 };
 
     socket.onclose = () => {
-        if (statusDiv) {
-            statusDiv.innerText = 'Status: Disconnected';
-            statusDiv.style.color = '#f44747';
-        }
+        statusDiv.innerText = 'Status: Disconnected. ';
+        statusDiv.style.color = '#f44747';
     };
 
 
 });
 
 /* === Functions === */
+
+/**
+ * Visual feedback that server has received and processed the update.
+ * @param {string} nodeId - The ID of the updated node.
+ * @param {number} subIdx - The index of the updated sub-module.
+ */
+function handleSaveConfirmation(nodeId, subIdx) {
+    const subKey = `${nodeId}-${subIdx}`;
+    /* Target the specific cells related to this sub-module */
+    const cells = document.querySelectorAll(`.node-${nodeId}`);
+    
+    cells.forEach(cell => {
+        /* We check the unique IDs we set in the renderer to only flash the specific row */
+        if (cell.innerHTML.includes(`id="msg-${subKey}"`) || 
+            cell.innerHTML.includes(`id="raw-${subKey}"`)) {
+            
+            cell.classList.add('flash-success');
+            
+            /* Remove class after animation finishes so it can be re-triggered */
+            setTimeout(() => {
+                cell.classList.remove('flash-success');
+            }, 1500); /**< Matches CSS animation duration */
+        }
+    });
+}
 
 function formatTimestampAsUTC(milliseconds) {
   const dateObj = new Date(milliseconds);
@@ -72,9 +97,8 @@ function connect() {
     socket = new WebSocket(socketUrl);
 
     socket.onclose = () => {
-        statusDiv.innerText = 'Status: Disconnected. Retrying...';
+        statusDiv.innerText = 'Status: Disconnected.';
         statusDiv.style.color = '#f44747';
-        setTimeout(connect, RETRY_DELAY);
     };
 
     /* ... include your existing onmessage and onopen handlers ... */

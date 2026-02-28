@@ -152,6 +152,15 @@
             outline: none; /* Removes the default focus ring which acts like a border */
         }
         .save-btn { background-color: #2ea043 !important; color: white !important; }
+        
+        @keyframes flash-green {
+            0% { background-color: #2ea043; }
+            100% { background-color: transparent; }
+        }
+
+        .flash-success {
+            animation: flash-green 1.5s ease-out;
+        }
     </style>
 </head>
 <body>
