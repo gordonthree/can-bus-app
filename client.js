@@ -141,7 +141,8 @@ function formatTimestampAsUTC(milliseconds) {
   const minutes = dateObj.getUTCMinutes().toString().padStart(SMALL_BYTE_WDH, '0');
   const seconds = dateObj.getUTCSeconds().toString().padStart(SMALL_BYTE_WDH, '0');
 
-  return `${hours}:${minutes}:${seconds}`;
+  return `${hours}:${minutes}`;
+//   return `${hours}:${minutes}:${seconds}`; /* don't return seconds */
 }
 
 function connect() {
@@ -377,8 +378,8 @@ function renderNodeDatabase(db) {
             // Change the button HTML string to include 'event'
             { html: `<button class="compact-btn" title="Toggle Sub-module Display" onclick="toggleSubModules(event, '${nodeId}')">+</button>
                      <button class="compact-btn" title="re-Interview Node" onclick="requestNodeInterview('${nodeId}')">I</button>
-                     <button class="compact-btn" title="Remove From Database" onclick="eraseNode('${nodeId}')">X</button>
-                     <button class="compact-btn" title="Send CAN Command" onclick="commandNode('${nodeId}')">C</button>`,
+                     <button class="compact-btn" title="Remove From Database" onclick="requestRemoveNode('${nodeId}')">X</button>
+                     <button class="compact-btn" title="Send CAN Command" onclick="nodeSendCanCommand('${nodeId}')">C</button>`,
                     class: 'node-parent'
             },
             { html: `ID: ${nodeId}`, class: 'node-parent hex-id' },
