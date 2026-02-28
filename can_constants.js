@@ -364,16 +364,16 @@ export const CFG_RESERVED_428_DLC = 4;
  /** 0x429 cfg sub raw data */
 export const CFG_SUB_RAW_DATA_ID = 0x429;
 export const CFG_SUB_RAW_DATA_DLC = 8;
- /** 0x42A node data msg */
+ /** 0x42A configure parent node data message (currently not implemented) */
 export const CFG_NODE_DATA_MSG_ID = 0x42A;
 export const CFG_NODE_DATA_MSG_DLC = 7;
- /** 0x42B node intro msg */
+ /** 0x42B configure parent node intro message */
 export const CFG_NODE_INTRO_MSG_ID = 0x42B;
 export const CFG_NODE_INTRO_MSG_DLC = 7;
- /** 0x42C sub data msg */
+ /** 0x42C configure sub-module data message */
 export const CFG_SUB_DATA_MSG_ID = 0x42C;
 export const CFG_SUB_DATA_MSG_DLC = 8;
- /** 0x42D sub intro msg */
+ /** 0x42D configure sub-module intro message, this defines the sub module type */
 export const CFG_SUB_INTRO_MSG_ID = 0x42D;
 export const CFG_SUB_INTRO_MSG_DLC = 8;
  /** 0x42E colorpicker read nvs */
