@@ -132,11 +132,12 @@ function editSubModule(event, nodeId, subIdx) {
         const currentDlc = dlcSpan.innerText;
     
 
-        msgSpan.innerHTML = `<input type="text" id="input-msg-${subKey}" class="edit-input" size="4" value="${currentMsg}">`;
-        rawSpan.innerHTML = `<input type="text" id="input-raw-${subKey}" class="edit-input" size="${currentRaw.length + 1}" value="${currentRaw}">`;
-        dlcSpan.innerHTML = `<input type="text" id="input-dlc-${subKey}" class="edit-input" size="4" value="${currentDlc}">`;
+        msgSpan.innerHTML = `<input type="text" title="Data Message ID" id="input-msg-${subKey}" class="edit-input" size="4" value="${currentMsg}">`;
+        rawSpan.innerHTML = `<input type="text" title="Raw Configuration String" id="input-raw-${subKey}" class="edit-input" size="${currentRaw.length + 1}" value="${currentRaw}">`;
+        dlcSpan.innerHTML = `<input type="text" title="Data Message DLC" id="input-dlc-${subKey}" class="edit-input" size="4" value="${currentDlc}">`;
 
         btn.innerText = 'S'; // Switch to Save
+        btn.title = "Save Changes";
         btn.classList.add('save-btn');
     } else {
         console.log("Saving changes for sub-module:", subIdx);
@@ -164,6 +165,7 @@ function editSubModule(event, nodeId, subIdx) {
 
         btn.innerText = 'E';
         btn.classList.remove('save-btn');
+        btn.title = "Edit Sub-module";
 
         // Transmit the update to the Node.js server
         saveNodeUpdate(nodeId, subIdx, newMsgVal, rawArray, newDlcVal);
@@ -238,10 +240,10 @@ function renderNodeDatabase(db) {
         // Parent Row
         const parentCells = [
             // Change the button HTML string to include 'event'
-            { html: `<button class="compact-btn" onclick="toggleSubModules(event, '${nodeId}')">+</button>
-                     <button class="compact-btn" onclick="interviewNode('${nodeId}')">I</button>
-                     <button class="compact-btn" onclick="eraseNode('${nodeId}')">X</button>
-                     <button class="compact-btn" onclick="commandNode('${nodeId}')">C</button>`,
+            { html: `<button class="compact-btn" title="Toggle Sub-module Display" onclick="toggleSubModules(event, '${nodeId}')">+</button>
+                     <button class="compact-btn" title="re-Interview Node" onclick="interviewNode('${nodeId}')">I</button>
+                     <button class="compact-btn" title="Remove From Database" onclick="eraseNode('${nodeId}')">X</button>
+                     <button class="compact-btn" title="Send CAN Command" onclick="commandNode('${nodeId}')">C</button>`,
                     class: 'node-parent'
             },
             { html: `ID: ${nodeId}`, class: 'node-parent hex-id' },
@@ -261,8 +263,8 @@ function renderNodeDatabase(db) {
             const subKey = `${nodeId}-${sub.subModIdx}`;
 
             const subCells = [
-                { html:  `<button class="compact-btn" onclick="editSubModule(event,'${nodeId}',${sub.subModIdx})">E</button>
-                        <button class="compact-btn" onclick="closeEditor(event, '${nodeId}', ${sub.subModIdx})">X</button>`, 
+                { html:  `<button class="compact-btn" title="Edit Sub-module" onclick="editSubModule(event,'${nodeId}',${sub.subModIdx})">E</button>
+                        <button class="compact-btn" title="Abort Edit" onclick="closeEditor(event, '${nodeId}', ${sub.subModIdx})">X</button>`, 
                 class: 'sub-module-row' 
                 },
                 { html:  `Idx: ${sub.subModIdx.toString().padStart(SMALL_BYTE_WDH, '0')}`, 
