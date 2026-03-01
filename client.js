@@ -54,18 +54,107 @@ const SUB_CONFIG_BYTES = 3;
 /** Tracks which Node IDs are currently expanded in the accordion */
 const expandedNodes = new Set();
 
+/** Mapping of Sub-Module personalities to their configuration specifics.
+ * Derived from the subModule_t C struct.
+ * three html labels for each input field
+ * three html input types 0 = read-only textbox, 1 = text numeric input, 2 = select dropdown
+*/
+const personalities = {
+    0x702: {
+        name: "ARGB Strip",
+        cfgMsgId: 0x432,
+        cfgMsgDlc: 8,
+        labels: ["Output Pin", "LED Count", "Color Order"],
+        inputs: [1, 1, 1]
+    },
+    0x701: {
+        name: "ARGB Strip",
+        cfgMsgId: 0x432,
+        cfgMsgDlc: 8,
+        labels: ["Output Pin", "LED Count", "Color Order"],
+        inputs: [1, 1, 1]
+    },
+    0x711: {
+        name: "Digital Input",
+        cfgMsgId: 0x433,
+        cfgMsgDlc: 8,
+        labels: ["Input Pin", "Input Resistor", "Inverted"],
+        inputs: [1, 2, 2]
+    },
+    0x70A: {
+        name: "Analog Backlight",
+        cfgMsgId: 0x434,
+        cfgMsgDlc: 8,
+        labels: ["Output Pin", "Blink/PWM Rate", "Output Mode"],
+        inputs: [1, 1, 2]
+    },
+    0x744: {
+        name: "Digital Output",
+        cfgMsgId: 0x434,
+        cfgMsgDlc: 8,
+        labels: ["Output Pin", "Blink/PWM Rate", "Output Mode"],
+        inputs: [1, 1, 2]
+    },
+    0x70B: {
+        name: "LCD Display",
+        cfgMsgId: 0x435,
+        cfgMsgDlc: 8,
+        labels: ["Reserved", "Reserved", "Reserved"],
+        inputs: [0, 0, 0]
+    }
+}
+
+
 /** * Mapping of Sub-Module personalities to their configuration labels.
  * Derived from the subModule_t C struct.
  */
-const PERSONALITY_MAP = {
-    0x438: ["Output Pin", "Blink Delay (100ms)", "Strobe Pattern"],
-    0x439: ["Strip/Pin Index", "Color Index", "Configuration Index"], // Combined Analog/ARGB logic
-    0x43B: ["Input Pin", "Resistor (PU/PD)", "Inversion (H/L)"],
-    0x43C: ["Output Pin", "Momentary Dur (10ms)", "Output Mode"],
-    0x43D: ["Input Pin", "Oversample (High)", "Oversample (Low)"], // 16-bit split
-    0x43E: ["Output Pin", "Output Mode", "Reserved"],
-    0x43F: ["Output Pin", "PWM Freq (100Hz)", "Inversion (H/L)"]
+const PERSONALITY_MAP_LABELS = {
+    0x702: ["Output Pin", "LED Cnt", "Color Order"], /* ARGB Strip */
+    0x711: ["Input Pin", "Input Resistor (PU/PD/Float)", "Inverted"], /* Digital input */
+    0x70A: ["Output Pin", "Blink/PWM Rate", "Output Mode"], /* Digital output */
+    0x70B: ["Reserved", "Reserved", "Reserved"], /* LCD Display */
+    0x744: ["Output Pin", "Blink/PWM Rate", "Output Mode"]
+
 };
+
+/** Input types for each sub-module personality 0 = read-only, 1 = numeric, 2 = dropdown */
+const PERSONALITY_MAP_INPUTS = {
+    0x702: [1, 1, 1], /* ARGB Strip */
+    0x711: [1, 2, 2], /* Digital input */
+    0x70A: [1, 1, 2], /* Digital output */
+    0x70B: [0, 0, 0], /* LCD Display */
+    0x744: [1, 1, 2] /* Digital output */
+};
+
+/** Analog LED strip color order, from canbus_defs.h */
+const ANALOG_RGB_COLOR_IDX_MAP = {
+    0: "Red",
+    1: "Green",
+    2: "Blue",
+    3: "White",
+    4: "RGB",
+    5: "RGBW",
+    6: "RGBA",
+    7: "RGBCCT"
+}
+
+/** Digital input resistor modes, from canbus_defs.h */
+const DIGITAL_INPUT_RES_MODE = {
+    0: "Pullup",
+    1: "Pulldown",
+    2: "Floating"
+}
+
+/** Digital output modes, from canbus_defs.h */
+const DIGITAL_OUTPUT_MODE = {
+    0: "Off",
+    1: "On",
+    2: "Toggle",
+    3: "Momentary",
+    4: "Blink",
+    5: "Strobe",
+    6: "PWM"
+}
 
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -336,11 +425,19 @@ function renderAuditLog(logs) {
  * Updates the labels for the configuration bytes based on the selected personality ID.
  */
 function updateConfigLabels(nodeId, subIdx, personalityId) {
-    const labels = PERSONALITY_MAP[personalityId] || ["Raw Byte 0", "Raw Byte 1", "Raw Byte 2"];
-    const labelContainer = document.getElementById(`labels-${nodeId}-${subIdx}`);
-    if (labelContainer) {
-        labelContainer.innerHTML = labels.map(l => `<span class="config-label">${l}</span>`).join('');
+    /** look up label text based on introID */
+    const labels = personalities[personalityId].labels || ["Raw byte 0", "Raw byte 1", "Raw byte 2"];
+    for (let i = 0; i<SUB_CONFIG_BYTES; i++) {
+        /** loop through config bytes, assign labels if possible */
+        const labelContainer = document.getElementById(`sub-${nodeId}-${subIdx}-label${i}`);
+        if (labelContainer) {
+            labelContainer.innerText = labels[i];
+        }
     }
+    // const labelContainer = document.getElementById(`labels-${nodeId}-${subIdx}`);
+    // if (labelContainer) {
+        // labelContainer.innerHTML = labels.map(l => `<span class="config-label">${l}</span>`).join('');
+    // }
 }
 
 /**
@@ -738,19 +835,30 @@ function renderNodeDatabase(nodes) {
                 /** Raw Config Label */
                 const rawCfgLabel = document.createElement('span');
                 rawCfgLabel.className = 'label-text';
-                rawCfgLabel.innerText = 'Raw Config:';
+                rawCfgLabel.innerText = (personalities.hasOwnProperty(subMod.introMsgId)) ? 'Configuration' : 'Raw Config Bytes:';
                 sRow2.append(rawCfgLabel);
 
-                                
+                console.log(`subMod.introMsgId: ${subMod.introMsgId}`);
+                /** look up labels based on introID */
+                const rawLabels = personalities[subMod.introMsgId].labels || ["Raw byte 0", "Raw byte 1", "Raw byte 2"];
+
                 /** build an input box for each of the config bytes */
                 for (let i = 0; i < SUB_CONFIG_BYTES; i++) {
+                    /** Create a label we can access later */
+                    const bLabel = document.createElement('span');
+                    bLabel.className = 'label-text';
+                    bLabel.classList.add('label-text-inside');
+                    bLabel.innerText = `${rawLabels[i]}:`; /* assign label programmatically */
+                    bLabel.id = `sub-${nodeId}-${idxStr}-label${i}`;
+                    sRow2.append(bLabel);
+
+                    /** Create input box for numeric data */
                     const bIn = document.createElement('input');
                     bIn.type = 'text';
                     bIn.inputMode = 'numeric'; /* Force numeric input */
                     bIn.className = 'editor-input';
                     bIn.classList.add('small-input');
-                    /** limit input to single byte values */
-                    bIn.min = 0; bIn.max = 255;
+                    bIn.min = 0; bIn.max = 255; /* limit input to single byte values */
                     bIn.id = `sub-${nodeId}-${idxStr}-raw${i}`;
                     bIn.value = subMod.rawConfig ? subMod.rawConfig[i] : 0;
                     sRow2.append(bIn);
