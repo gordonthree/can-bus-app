@@ -10,72 +10,44 @@
             --border: #333;
             --text: #e0e0e0;
             --accent: #4ec9b0;
+            --header-bg: #252526;
+            --input-bg: #2d2d2d;
+            --idcolor: #d48d53;
         }
 
-        body { font-family: 'Segoe UI', Tahoma, sans-serif; 
-               background: var(--bg-color); 
-               color: var(--text); 
-               padding: 20px; }
-        
-
-        /** Theme-consistent Grid Layout */
-        #editor-container {
-            display: grid;
-            grid-template-columns: 150px 100px 1fr 100px;
-            gap: 2px;
-            background-color: #000; /* Subtle border effect via gap */
+        body { 
+            font-family: 'Segoe UI', Tahoma, sans-serif; 
+            background: var(--bg-color); 
+            color: var(--text); 
+            padding: 20px; 
         }
 
+        /* --- Base Grid Elements --- */
         .header-cell, .data-cell {
-            background-color: #1a1a1a;
             padding: 12px;
+            background-color: var(--card-bg);
             display: flex;
             align-items: center;
-            color: #e0e0e0;
         }
 
         .header-cell {
             font-weight: bold;
+            background-color: var(--header-bg);
             color: var(--accent);
             text-transform: uppercase;
-            font-size: 0.85rem;
+            font-size: 0.8rem;
+            height: 16px; /* Fixed height for header consistency */
         }
 
-        /** Dark Mode Inputs */
-        .editor-input {
-            background-color: #252525;
-            color: #ffffff;
-            border: 1px solid #333;
-            border-radius: 3px;
-            padding: 4px;
+        .data-cell { 
+            font-family: 'Cascadia Code', monospace; 
+            font-size: 0.9rem; 
         }
 
-        .editor-input:focus {
-            outline: none;
-            border-color: var(--accent);
+        .id-cell {
+            color: var(--idcolor);
         }
-
-        /** Alignment Helpers */
-        .label-row {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-
-        .label-text {
-            color: var(--accent);
-            font-size: 0.9rem;
-            margin-right: 4px;
-        }
-
-        .sub-data-container {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-            width: 100%;
-        }
-        
-        /* Grid Configuration */
+        /* --- Specific Grid Layouts --- */
         .can-grid {
             display: grid;
             grid-template-columns: 0.75fr 0.5fr 4fr 0.5fr; /* Time, ID, Data, DLC */
@@ -87,9 +59,15 @@
             overflow-y: auto;
         }
 
+        /* Specific override for the Inventory/Editor */
+        #editor-container {
+            grid-template-columns: 0.3fr 0.3fr 2fr; 
+            height: auto; /* Allow growth or set specific height */
+        }
+
         .config-grid {
             display: grid;
-            grid-template-columns: 1.5fr 1fr 3fr 0.5fr; /* Time, ID, Data, DLC */
+            grid-template-columns: 1.5fr 1fr 3fr 0.5fr;
             gap: 1px;
             background-color: var(--border);
             border: 1px solid var(--border);
@@ -98,204 +76,6 @@
             overflow-y: auto;
         }
 
-
-        .header-cell, .data-cell {
-            padding: 12px;
-            background-color: var(--card-bg);
-        }
-
-        .header-cell {
-            font-weight: bold;
-            background-color: #252526;
-            color: var(--accent);
-            text-transform: uppercase;
-            font-size: 0.8rem;
-            height: 16px;
-            vertical-align: middle;
-        }
-
-        .data-cell { font-family: 'Cascadia Code', monospace; 
-                     font-size: 0.9rem; 
-                     vertical-align: middle; }
-
-        .hex-id { color: #ce9178; }
-        .hex-data { color: #dcdcaa; }
-
-        /* Color coding based on CAN ID range */
-        .range-switch   { background-color: #3d5a80 !important; 
-                          color: #e0e0e0; } /* 0x100-0x1FF (Switch)*/
-        .range-display  { background-color: #4f6d7a !important; 
-                          color: #e0e0e0; } /* 0x200-0x2FF (Display) */
-        .range-config   { background-color: #5f7d8a !important; 
-                          color: #e0e0e0; } /* 0x400-0x4FF (System/Config) */
-        .range-data     { background-color: #6b5655 !important; 
-                          color: #e0e0e0; } /* 0x500-0x5FF (Data) */
-        .range-intro    { background-color: #2f621f !important; 
-                          color: #ffffff; } /* 0x700-0x7FF (Introduction) */
-
-        .controls { margin-bottom: 20px; 
-                    display: flex; 
-                    gap: 10px; 
-                    align-items: center; 
-                    vertical-align: middle;}
-
-        #filter-input { background: #2d2d2d; 
-                        border: 1px solid #444; 
-                        color: white; 
-                        padding: 5px 10px; 
-                        border-radius: 4px; }
-
-        button { cursor: pointer; 
-                 background: var(--accent); 
-                 border: none; 
-                 padding: 6px 12px; 
-                 border-radius: 4px; 
-                 font-weight: bold; }
-
-        .filter-tag { 
-            display: inline-block; 
-            background: #3e3e42; 
-            padding: 2px 8px; 
-            border-radius: 12px; 
-            font-size: 0.8rem; 
-            margin-left: 5px;
-            border: 1px solid var(--accent);
-        }
-
-        #status { margin-bottom: 15px; font-size: 0.9rem; }
-
-        .node-parent { font-weight: bold; 
-                       background-color: #2a2d2e !important; 
-                       border-bottom: 1px solid var(--accent); 
-                    }
-        /* Ensure sub-module cells stay hidden by default */
-        .sub-module-row { 
-            display: none; 
-            background-color: #1a1a1b !important; 
-            font-size: 0.85rem; 
-            border-bottom: 1px solid #333; /* Visual separation for sub-rows */
-        }
-
-        .editor-cell {
-            display: flex;
-            gap: 10px;
-            align-items: center;
-        }
-
-        .editor-input {
-            background-color: #2d2d2d;
-            color: #ffffff;
-            border: 1px solid #555;
-            border-radius: 3px;
-            padding: 2px 5px;
-            font-family: 'Cascadia Code', monospace;
-            font-size: 0.85rem;
-        }
-        .editor-input:focus {
-            outline: none;
-            border-color: var(--accent);
-        }
-        
-        /* Container for personality-specific labels */
-        .label-row {
-            grid-column: 1 / -1; /* Span full width of the grid */
-            display: flex;
-            justify-content: flex-end;
-            gap: 15px;
-            font-size: 0.75rem;
-            color: var(--accent);
-            padding-right: 100px;
-        }
-
-        .label {
-            font-size: 0.75rem;
-            color: var(--accent);
-            padding-right: 100px;            
-        }
-
-        .config-label {
-            opacity: 0.8;
-            font-style: italic;
-        }
-        
-
-        /* Ensure select boxes match your dark theme */
-        select.cell-input {
-            background-color: #252526;
-            color: var(--text);
-            border: none;
-            width: 100%;
-        }
-
-        input.cell-input {
-            background-color: #252526;
-            color: var(--text);
-            border: none;
-            width: 100%;
-        }
-
-        .config-byte-wrapper {
-            display: flex;
-            gap: 5px;
-            margin-bottom: 2px;
-        }
-
-        .small-input {
-            width: 50px !important;
-            text-align: center;
-        }
-
-        .label-row {
-            display: flex;
-            gap: 12px;
-            font-size: 0.7rem;
-            color: var(--accent);
-            opacity: 0.7;
-        }
-        /* 
-         * When expanded, change from 'none' to 'block' or 'grid-cell' behavior.
-         * Since they are direct children of a display:grid container, 
-         * setting them to anything other than 'none' puts them back in the grid. 
-         */
-        .sub-module-row.expanded { 
-            display: block; 
-        }
-        .compact-btn { 
-            background: none; 
-            border: 1px solid var(--accent); 
-            color: var(--accent); 
-            padding: 2px 6px; 
-            font-size: 0.7rem; 
-        }
-        .oldedit-input {
-            background: #2d2d2d;
-            border: 0px solid; /* no border */
-            color: #ffffff;
-            padding: 1px 1px; /* minimal padding */
-            font-family: 'Cascadia Code', monospace;
-            font-size: 0.85rem;
-        }
-        .edit-input {
-            background: #2d2d2d;
-            border: none; 
-            color: #ffffff;
-            padding: 1px 1px;
-            font-family: 'Cascadia Code', monospace;
-            font-size: 0.85rem;
-            outline: none; /* Removes the default focus ring which acts like a border */
-        }
-        .save-btn { background-color: #2ea043 !important; color: white !important; }
-        
-        @keyframes flash-green {
-            0% { background-color: #2ea043; }
-            100% { background-color: transparent; }
-        }
-
-        .flash-success {
-            animation: flash-green 1.5s ease-out;
-        }
-
-        /* Audit Grid Configuration (5 columns) */
         .audit-grid {
             display: grid;
             grid-template-columns: 1fr 1.5fr 1fr 2fr 3fr; /* Time, Node, Field, Change, Comment */
@@ -306,13 +86,86 @@
             height: 300px;
             overflow-y: auto;
         }
-        .audit-input {
-            background: #2d2d2d;
+
+        /* --- Input Styles --- */
+        .editor-input, .edit-input, .audit-input, .cell-input {
+            background-color: var(--input-bg);
             color: #ffffff;
+            border: 1px solid #444;
+            border-radius: 3px;
+            padding: 2px;
             font-family: 'Cascadia Code', monospace;
             font-size: 0.85rem;
-            width: 100%;
+            box-sizing: border-box;
         }
+
+        .editor-input:focus, .cell-input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        .small-input {
+            width: 50px !important;
+            text-align: center;
+        }
+
+        /* --- Labels and Helpers --- */
+        .label-row {
+            grid-column: 1 / -1;
+            display: flex;
+            justify-content: flex-end;
+            gap: 12px;
+            font-size: 0.7rem;
+            color: var(--accent);
+            opacity: 0.7;
+            padding-right: 20px;
+            margin-top: 4px;
+        }
+
+        .label-text {
+            font-weight: bold;
+            font-size: 0.85rem;
+            color: var(--accent);
+            padding-right: 20px;
+            gap: 12px;
+        }
+
+        .label-text-inside {
+            padding-left: 20px;
+        }
+
+        /* --- CAN Specific Coloring --- */
+        .hex-id { color: #ce9178; }
+        .hex-data { color: #dcdcaa; }
+
+        .range-switch  { background-color: #3d5a80 !important; } 
+        .range-display { background-color: #4f6d7a !important; }
+        .range-config  { background-color: #5f7d8a !important; }
+        .range-data    { background-color: #6b5655 !important; }
+        .range-intro   { background-color: #2f621f !important; }
+
+        /* --- Buttons & Status --- */
+        .controls { margin-bottom: 20px; display: flex; gap: 10px; align-items: center; }
+
+        button { 
+            cursor: pointer; 
+            background: var(--accent); 
+            border: none; 
+            padding: 6px 12px; 
+            border-radius: 4px; 
+            font-weight: bold; 
+            color: #121212; /* Dark text on light accent */
+        }
+
+        .save-btn { background-color: #2ea043 !important; color: white !important; }
+
+        /* --- Animations --- */
+        @keyframes flash-green {
+            0% { background-color: #2ea043; }
+            100% { background-color: transparent; }
+        }
+        .flash-success { animation: flash-green 1.5s ease-out; }
+
     </style>
 </head>
 <body>
