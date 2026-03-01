@@ -32,10 +32,24 @@ const NODE_INTRO_MSG_BEGIN = 0x780;
 /** Last node intro message value 0x7FF */
 const NODE_INTRO_MSG_END   = 0x7FF;
 
+/** Sub module intro messages begin at 0x700 */
+const SUBMOD_INTRO_BEGIN = 0x700;
+/** Sub module intro messages end at 0x77F */
+const SUBMOD_INTRO_END   = 0x77F;
+
+/** Data messages start at 0x110 */
+const SUBMOD_DATA_BEGIN = 0x110;
+
+/** Data messages end at 0x5FF */
+const SUBMOD_DATA_END   = 0x5FF;
+
 /** Maximum DLC value */
 const DLC_MAX = 8;
 /** Minimum DLC value */
 const DLC_MIN = 0;
+/** Sub-module config bytes (24-bits) */
+const SUB_CONFIG_BYTES = 3;
+
 
 /** Tracks which Node IDs are currently expanded in the accordion */
 const expandedNodes = new Set();
@@ -478,41 +492,95 @@ function renderNodeDatabase(nodes) {
     const container = document.getElementById('editor-container');
     if (!container) return;
 
+    /** Header row: three columns
+     * Command | Hardware ID | Configuration
+     * This seems to work as HTML, doing it through JS causes
+     * the expand/collapse function to break
+     */
     container.innerHTML = `
         <div class="header-cell">Command</div>
         <div class="header-cell">Hardware ID</div>
         <div class="header-cell">Configuration</div>
     `;
 
+    // /** Header row: three columns */
+    // const commandHeader = document.createElement('div');
+    // commandHeader.className = 'header-cell';
+    // commandHeader.innerText = 'Command';
+
+    // const hardwareIdHeader = document.createElement('div');
+    // hardwareIdHeader.className = 'header-cell';
+    // hardwareIdHeader.innerText = 'Hardware ID';
+
+    // const configHeader = document.createElement('div');
+    // configHeader.className = 'header-cell';
+    // configHeader.innerText = 'Configuration';
+
+    // container.append(commandHeader, hardwareIdHeader, configHeader);
+
     for (const [nodeId, nodeData] of Object.entries(nodes)) {
         const isExpanded = expandedNodes.has(nodeId);
         
-        // 1. Command Cell
+        /** Command Buttons Cell */
         const cmdCell = document.createElement('div');
         cmdCell.className = 'data-cell';
-        cmdCell.innerHTML = `
-            <button onclick="toggleNode('${nodeId}')">${isExpanded ? '[-]' : '[+]'}</button>
-            <button onclick="persistNodeToBus('${nodeId}')" style="margin-left:5px">Persist</button>
-        `;
+        cmdCell.classList.add('command-cell');
+
+        /** button to expand parent node */
+        const buttonExpandNode = document.createElement('button');
+        buttonExpandNode.className = 'command-button';
+        buttonExpandNode.id = `expand-button-${nodeId}`;
+        buttonExpandNode.title = isExpanded ? 'Collapse Node' : 'Expand Node';
+        buttonExpandNode.innerText = isExpanded ? '[-]' : '[+]';
+        buttonExpandNode.onclick = () => toggleNode(nodeId);
+
+        /** button to persist parent node to bus */
+        const buttonPersistNode = document.createElement('button');
+        buttonPersistNode.className = 'command-button';
+        buttonPersistNode.id = `persist-button-${nodeId}`;
+        buttonPersistNode.innerText = '[P]';
+        buttonPersistNode.title = 'Persist Changes';
+        buttonPersistNode.style.marginLeft = '5px';
+        buttonPersistNode.onclick = () => persistNodeToBus(nodeId);
+
+        /** button to (re)interview parent node */
+        const buttonInterviewNode = document.createElement('button');
+        buttonInterviewNode.className = 'command-button';
+        buttonInterviewNode.id = `interview-button-${nodeId}`;
+        buttonInterviewNode.innerText = '[I]';
+        buttonInterviewNode.title = 'Interview Node';
+        buttonInterviewNode.style.marginLeft = '5px';
+        buttonInterviewNode.onclick = () => interviewNode(nodeId);
+
+        /** add buttons to command cell */
+        cmdCell.append(buttonExpandNode, buttonPersistNode, buttonInterviewNode);
+
 
         // 2. ID Cell
         const idCell = document.createElement('div');
         idCell.className = 'data-cell';
         idCell.classList.add('id-cell');
-        idCell.innerText = nodeId.toUpperCase();
 
-        // 3. Data Cell (Wrapped in a single div)
+        const idCellText = document.createElement('span');
+        idCellText.innerText = nodeId.toUpperCase();
+        idCellText.className = 'hex-id';
+        idCellText.style.paddingLeft = '4px';
+
+        idCell.append(idCellText);
+
+        // 3. Data Cell (Container for config labels and inputs)
         const dataCell = document.createElement('div');
         dataCell.className = 'data-cell';
+        dataCell.classList.add('config-cell');
 
-        /** Create wrapper for the input elements */
+        /** Single row wrapper for the input elements */
         const dataWrapper = document.createElement('div');
         dataWrapper.className = 'input-group';
         
         /** Create label for the Intro Message Dropdown */
         const typeLabel = document.createElement('span'); 
         typeLabel.className = 'label-text';
-        typeLabel.innerText = "Intro Message:";
+        typeLabel.innerText = "Intro ID:";
 
         /** Create the Intro Message Dropdown */
         let nodeTypeSelect = document.createElement('select');
@@ -529,11 +597,12 @@ function renderNodeDatabase(nodes) {
         /** Create the Sub-Module Count Input */
         const subModCntInput = document.createElement('input');
         subModCntInput.className   = 'editor-input';
+        subModCntInput.classList.add('small-input');
         subModCntInput.value       = nodeData.subModCnt;
-        subModCntInput.type        = 'number';
+        subModCntInput.type        = 'text';
+        subModCntInput.inputmode   = 'numeric'; /* Only allow numeric input */
         subModCntInput.min         = SUBMOD_CNT_MIN;
         subModCntInput.max         = SUBMOD_CNT_MAX;
-        subModCntInput.style.width = '40px';
         subModCntInput.id          = `sub-mod-cnt-${nodeId}`;
 
         /** Create label for the DLC input */
@@ -545,8 +614,9 @@ function renderNodeDatabase(nodes) {
         /** Create the DLC Input */
         const dlcInput = document.createElement('input');
         dlcInput.className = 'editor-input';
-        dlcInput.style.width = '40px';
-        dlcInput.type = 'number';
+        dlcInput.classList.add('small-input');
+        dlcInput.type = 'text';
+        dlcInput.inputmode = 'numeric'; /* Only allow numeric input */
         dlcInput.min = DLC_MIN;
         dlcInput.max = DLC_MAX;
         dlcInput.value = nodeData.nodeTypeDlc;
@@ -558,15 +628,7 @@ function renderNodeDatabase(nodes) {
         /** Append the wrapper to the data cell, only one row for the parent node */
         dataCell.appendChild(dataWrapper);
 
-        // 4. DLC Cell (empty for now)
-        // const dlcCell = document.createElement('div');
-        // dlcCell.className = 'data-cell';
-        // const dlcFiller = document.createElement('span');
-        // dlcFiller.innerHTML = '&nbsp;';
-        // dlcCell.appendChild(dlcFiller);
-
-
-        // Bind PARENT changes to send update
+        /** Bind PARENT changes to send update */
         const handleParentChange = () => {
             const updatedParent = {
                 ...nodeData, // Keep existing fields
@@ -581,99 +643,152 @@ function renderNodeDatabase(nodes) {
         subModCntInput.onchange = handleParentChange;
         dlcInput.onchange = handleParentChange;
 
-        // Append Parent Row to Grid
-        // container.append(cmdCell, idCell, dataCell, dlcCell);
-        /** only three cells in the editor grid */
+        /** Append row to grid */
         container.append(cmdCell, idCell, dataCell); 
 
 
-        // --- SUB-MODULES ---
+        /** --- SUB-MODULES --- */
         if (isExpanded && nodeData.subModule) {
+            /** loop through the sub-module entires and create editor rows */
             for (const [idxStr, subMod] of Object.entries(nodeData.subModule)) {
-                // Sub-module Command Cell
-                const sCmd = document.createElement('div');
-                sCmd.className = 'data-cell';
-                sCmd.style.justifyContent = 'flex-end';
-                sCmd.innerText = '↳ Sub-module';
+                /* Remember grid is only three columns wide now */
 
-                // Sub-module ID Cell
-                const sId = document.createElement('div');
-                sId.className = 'data-cell';
-                sId.innerText = idxStr;
+                /* === First column: Sub-module Command Cell */
+                const subCmdCell = document.createElement('div');
+                subCmdCell.className = 'data-cell';
+                subCmdCell.classList.add('sub-cmd');
 
-                // Sub-module Data Cell (Stacked rows)
-                const sData = document.createElement('div');
-                sData.className = 'data-cell';
+                const sCmdText = document.createElement('span');
+                sCmdText.innerText = '↳ Sub-module';
+                subCmdCell.appendChild(sCmdText);
+
+                /* === Second column: Sub-module ID Cell */
+
+                /** Sub-module ID Cell */
+                const subIdCell = document.createElement('div');
+                subIdCell.className = 'data-cell';
+                subIdCell.classList.add('sub-id');
+
+                /** Sub-module ID text */
+                const subIdText = document.createElement('span');
+                subIdText.className = 'hex-id';
+                subIdText.innerText = idxStr;
+                subIdText.style.paddingLeft = '4px';
+                subIdCell.appendChild(subIdText);
+
+                /* === Third column: data entry rows */
+
+                /** Sub-module Data Cell (Stacked rows) */
+                const subDataCell = document.createElement('div');
+                subDataCell.className = 'data-cell';
+
+                /** Create container for the input element rows */
                 const sStack = document.createElement('div');
-                sStack.style.display = 'flex';
-                sStack.style.flexDirection = 'column';
-                sStack.style.gap = '8px';
+                sStack.className = 'config-stack';
 
-                // Sub-row 1: Intro/DataID
+                /** === ROW 1: Intro and Data Message and Data DLC */
                 const sRow1 = document.createElement('div');
                 sRow1.className = 'input-group';
-                sRow1.innerHTML = `<span class="label-text">Intro:</span>`;
-                const iSel = document.createElement('select');
-                iSel.className = 'editor-input';
-                iSel.innerHTML = buildDropdown(allDefinitions, 0x700, 0x77F, subMod.introMsgId);
-                sRow1.append(iSel);
-                
-                sRow1.innerHTML += `<span class="label-text">Data ID:</span>`;
-                const dSel = document.createElement('select');
-                dSel.className = 'editor-input';
-                dSel.innerHTML = buildDropdown(allDefinitions, 0x110, 0x5FF, subMod.dataMsgId);
-                sRow1.append(dSel);
 
-                // Sub-row 2: Raw Config
+                /** Intro message label and select box */
+                const introMsgLabel = document.createElement('span');
+                introMsgLabel.className = 'label-text';
+                introMsgLabel.innerText = 'Intro ID:';
+
+                let subIntroMsg = document.createElement('select');
+                subIntroMsg = buildDropdown(allDefinitions, SUBMOD_INTRO_BEGIN, SUBMOD_INTRO_END, subMod.introMsgId);
+                subIntroMsg.className = 'editor-input';
+                subIntroMsg.id = `sub-mod-${nodeId}-${idxStr}-intro-id`;
+                sRow1.append(introMsgLabel, subIntroMsg);
+
+                /** Data message label and select box */
+                const dataMsgLabel = document.createElement('span');
+                dataMsgLabel.className = 'label-text';
+                dataMsgLabel.classList.add('label-text-inside');
+                dataMsgLabel.innerText = 'Data ID:';
+
+                let subDataMsg = document.createElement('select');
+                subDataMsg = buildDropdown(allDefinitions, SUBMOD_DATA_BEGIN, SUBMOD_DATA_END, subMod.dataMsgId);
+                subDataMsg.className = 'editor-input';
+                subDataMsg.id = `sub-mod-${nodeId}-${idxStr}-data-id`;
+                sRow1.append(dataMsgLabel, subDataMsg);
+
+                /** Data Message DLC Label and input box */
+                const dataMsgDlcLabel = document.createElement('span');
+                dataMsgDlcLabel.className = 'label-text';
+                dataMsgDlcLabel.classList.add('label-text-inside');
+                dataMsgDlcLabel.innerText = "Data DLC:";
+                
+                const subDataDlc = document.createElement('input');
+                subDataDlc.className = 'editor-input';
+                subDataDlc.classList.add('small-input');
+                subDataDlc.type = 'text';
+                subDataDlc.inputMode = 'numeric'; /* Force numeric input */
+                subDataDlc.min = DLC_MIN;
+                subDataDlc.max = DLC_MAX;
+                subDataDlc.value = subMod.dataMsgDlc;
+                subDataDlc.id = `sub-mod-${nodeId}-${idxStr}-data-dlc`;
+
+                sRow1.append(dataMsgDlcLabel, subDataDlc);
+
+                /** === ROW 2: Specific Config */
                 const sRow2 = document.createElement('div');
                 sRow2.className = 'input-group';
-                sRow2.innerHTML = `<span class="label-text">Raw Config:</span>`;
-                
-                const CONFIG_BYTES = 3; /** Number of configuration bytes */
-                for (let i = 0; i < CONFIG_BYTES; i++) {
+
+                /** Raw Config Label */
+                const rawCfgLabel = document.createElement('span');
+                rawCfgLabel.className = 'label-text';
+                rawCfgLabel.innerText = 'Raw Config:';
+                sRow2.append(rawCfgLabel);
+
+                                
+                /** build an input box for each of the config bytes */
+                for (let i = 0; i < SUB_CONFIG_BYTES; i++) {
                     const bIn = document.createElement('input');
-                    bIn.type = 'number';
+                    bIn.type = 'text';
+                    bIn.inputMode = 'numeric'; /* Force numeric input */
                     bIn.className = 'editor-input';
-                    bIn.style.width = '45px';
+                    bIn.classList.add('small-input');
+                    /** limit input to single byte values */
+                    bIn.min = 0; bIn.max = 255;
+                    bIn.id = `sub-${nodeId}-${idxStr}-raw${i}`;
                     bIn.value = subMod.rawConfig ? subMod.rawConfig[i] : 0;
                     sRow2.append(bIn);
                 }
 
+                /** Add row1 and row2 to stack */
                 sStack.append(sRow1, sRow2);
-                sData.appendChild(sStack);
 
-                // Sub-module DLC
-                const sDlc = document.createElement('div');
-                sDlc.className = 'data-cell';
-                const sDlcIn = document.createElement('input');
-                sDlcIn.className = 'editor-input';
-                sDlcIn.style.width = '40px';
-                sDlcIn.value = subMod.dataMsgDlc;
-                sDlc.appendChild(sDlcIn);
+                /** Add config stack to the sub-module data container */
+                subDataCell.appendChild(sStack);
 
                 // Bind SUB-MODULE changes to send update
                 const handleSubModChange = () => {
                     const updatedSubMod = {
                         ...subMod,
-                        introMsgId: parseInt(introSelect.value, 10),
-                        dataMsgId: parseInt(dataIdSelect.value, 10),
-                        dataMsgDlc: parseInt(subDlcInput.value, 10),
+                        introMsgId: parseInt(subIntroMsg.value, 10),
+                        dataMsgId: parseInt(subDataMsg.value, 10),
+                        dataMsgDlc: parseInt(subDataDlc.value, 10),
                         rawConfig: [
-                            parseInt(rawInputs[0].value, 10),
-                            parseInt(rawInputs[1].value, 10),
-                            parseInt(rawInputs[2].value, 10)
+                            parseInt(`sub-${nodeId}-${idxStr}-raw0`.value, 10),
+                            parseInt(`sub-${nodeId}-${idxStr}-raw1`.value, 10),
+                            parseInt(`sub-${nodeId}-${idxStr}-raw2`.value, 10)
                         ]
                     };
                     sendConfigUpdate(nodeId, 'SUBMODULE', idx, updatedSubMod);
                 };
 
-                introSelect.onchange = handleSubModChange;
-                dataIdSelect.onchange = handleSubModChange;
-                subDlcInput.onchange = handleSubModChange;
-                rawInputs.forEach(input => input.onchange = handleSubModChange);
+                /** Assign onchange handlers */
+                subIntroMsg.onchange = handleSubModChange;
+                subDataMsg.onchange = handleSubModChange;
+                subDataDlc.onchange = handleSubModChange;
+                for (let i = 0; i < SUB_CONFIG_BYTES; i++) {
+                    `sub-${nodeId}-${idxStr}-raw${i}`.onchange = handleSubModChange;
+                }
+                // rawInputs.forEach(input => input.onchange = handleSubModChange);
 
-                container.append(subCmdCell, subIdCell, subDataCell, subDlcCell);
-            }
+                container.append(subCmdCell, subIdCell, subDataCell);
+            } /* End submodule For loop */
         }
     }
 }

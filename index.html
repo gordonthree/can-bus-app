@@ -42,11 +42,14 @@
         .data-cell { 
             font-family: 'Cascadia Code', monospace; 
             font-size: 0.9rem; 
+            padding: 2px;
+            padding-left: 4px;
         }
 
         .id-cell {
             color: var(--idcolor);
         }
+
         /* --- Specific Grid Layouts --- */
         .can-grid {
             display: grid;
@@ -63,6 +66,10 @@
         #editor-container {
             grid-template-columns: 0.3fr 0.3fr 2fr; 
             height: auto; /* Allow growth or set specific height */
+        }
+
+        .input-group {
+            padding-left: 0px;
         }
 
         .config-grid {
@@ -99,6 +106,13 @@
             box-sizing: border-box;
         }
 
+        .config-stack {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding: 12px;
+        }
+
         .editor-input:focus, .cell-input:focus {
             outline: none;
             border-color: var(--accent);
@@ -132,6 +146,12 @@
 
         .label-text-inside {
             padding-left: 20px;
+        }
+
+        .command-button {
+            font-size: 0.7rem;
+            font-family: Georgia, 'Times New Roman', Times, serif;
+            letter-spacing: 0.12em;
         }
 
         /* --- CAN Specific Coloring --- */
@@ -176,16 +196,13 @@
         <div id="active-filters"></div>
     </div>
 
-    <h2>Current Module Inventory</h2>
+    <h2>Module Editor</h2>
     <div class="can-grid" id="editor-container">
-        <div class="header-cell">Command</div>
-        <div class="header-cell">ID (Hex)</div>
-        <div class="header-cell">Data (Payload)</div>
-        <div class="header-cell">DLC</div>        
+      
     </div>
 
     <span>&nbsp;</span>
-    <h2>System Audit Log</h2>
+    <h2>Audit Log</h2>
     <div class="audit-grid" id="audit-container">
         <div class="header-cell">Timestamp</div>
         <div class="header-cell">Node (Sub)</div>
