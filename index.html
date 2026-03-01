@@ -17,15 +17,73 @@
                color: var(--text); 
                padding: 20px; }
         
+
+        /** Theme-consistent Grid Layout */
+        #editor-container {
+            display: grid;
+            grid-template-columns: 150px 100px 1fr 100px;
+            gap: 2px;
+            background-color: #000; /* Subtle border effect via gap */
+        }
+
+        .header-cell, .data-cell {
+            background-color: #1a1a1a;
+            padding: 12px;
+            display: flex;
+            align-items: center;
+            color: #e0e0e0;
+        }
+
+        .header-cell {
+            font-weight: bold;
+            color: var(--accent);
+            text-transform: uppercase;
+            font-size: 0.85rem;
+        }
+
+        /** Dark Mode Inputs */
+        .editor-input {
+            background-color: #252525;
+            color: #ffffff;
+            border: 1px solid #333;
+            border-radius: 3px;
+            padding: 4px;
+        }
+
+        .editor-input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        /** Alignment Helpers */
+        .label-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .label-text {
+            color: var(--accent);
+            font-size: 0.9rem;
+            margin-right: 4px;
+        }
+
+        .sub-data-container {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            width: 100%;
+        }
+        
         /* Grid Configuration */
         .can-grid {
             display: grid;
-            grid-template-columns: 0.5fr 1fr 3fr 0.5fr; /* Time, ID, Data, DLC */
+            grid-template-columns: 0.75fr 0.5fr 4fr 0.5fr; /* Time, ID, Data, DLC */
             gap: 1px;
             background-color: var(--border);
             border: 1px solid var(--border);
             border-radius: 4px;
-            height: 300px;
+            height: 600px;
             overflow-y: auto;
         }
 
@@ -58,7 +116,6 @@
 
         .data-cell { font-family: 'Cascadia Code', monospace; 
                      font-size: 0.9rem; 
-                     height: 16px; 
                      vertical-align: middle; }
 
         .hex-id { color: #ce9178; }
@@ -119,6 +176,26 @@
             border-bottom: 1px solid #333; /* Visual separation for sub-rows */
         }
 
+        .editor-cell {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .editor-input {
+            background-color: #2d2d2d;
+            color: #ffffff;
+            border: 1px solid #555;
+            border-radius: 3px;
+            padding: 2px 5px;
+            font-family: 'Cascadia Code', monospace;
+            font-size: 0.85rem;
+        }
+        .editor-input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+        
         /* Container for personality-specific labels */
         .label-row {
             grid-column: 1 / -1; /* Span full width of the grid */
@@ -130,13 +207,27 @@
             padding-right: 100px;
         }
 
+        .label {
+            font-size: 0.75rem;
+            color: var(--accent);
+            padding-right: 100px;            
+        }
+
         .config-label {
             opacity: 0.8;
             font-style: italic;
         }
+        
 
         /* Ensure select boxes match your dark theme */
         select.cell-input {
+            background-color: #252526;
+            color: var(--text);
+            border: none;
+            width: 100%;
+        }
+
+        input.cell-input {
             background-color: #252526;
             color: var(--text);
             border: none;
