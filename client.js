@@ -7,6 +7,7 @@ let statusDiv;
 let filterInput;
 let filterDisplay;
 let allDefinitions = [];
+let nodeDb;
 
 /** Set of active filters */
 const activeFilters   = new Set();
@@ -21,6 +22,9 @@ const HEX_BASE = 16;
 /** Offset for headers (first 4 divs) */
 const HEADER_COUNT = 4; 
 const MAX_ROWS = 20;
+
+/** Tracks which Node IDs are currently expanded in the accordion */
+const expandedNodes = new Set();
 
 /** * Mapping of Sub-Module personalities to their configuration labels.
  * Derived from the subModule_t C struct.
@@ -71,7 +75,8 @@ document.addEventListener('DOMContentLoaded', () => {
                  * dropdowns and labels have the data they need.
                  */
                 if (allDefinitions.length > 0) {
-                    renderNodeDatabase(message.payload);
+                    nodeDb = message.payload;
+                    renderNodeDatabase(nodeDb);
                 }
                 break;
 
@@ -109,6 +114,81 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 /* === Functions === */
+
+/**
+ * Helper to build a dropdown select element.
+ * @param {Array} definitions - The allDefinitions array.
+ * @param {Number} minId - Minimum Hex ID for this dropdown range.
+ * @param {Number} maxId - Maximum Hex ID for this dropdown range.
+ * @param {Number} currentValue - The current value to select.
+ * @returns {String} HTML string for the select element.
+ */
+function buildDropdown(definitions, minId, maxId, currentValue) {
+    let optionsHtml = `<option value="0">0x000 - UNKNOWN/NONE</option>`;
+
+    if (definitions.length === 0) {
+        return optionsHtml;
+    } 
+
+    // Filter definitions based on the allowed range for this field
+    const validDefs = definitions.filter(def => def.id_dec >= minId && def.id_dec <= maxId);
+
+    // console.log(definitions);
+
+    validDefs.forEach(def => {
+        /* Check if current definition matches the target value */
+        const isSelected = (def.id_dec == currentValue) ? 'selected' : '';
+
+        optionsHtml += `<option title="${def.description}" value="${def.id_dec}" ${isSelected}>${def.id_hex} - ${def.name}</option>`;
+    });
+
+    // Fallback in case the current value isn't in definitions but isn't 0
+    if (currentValue !== 0 && !validDefs.some(def => def.id_dec === currentValue)) {
+        const currentHex = '0x' + currentValue.toString(16).toUpperCase();
+        optionsHtml += `<option value="${currentValue}" selected>${currentHex} - CUSTOM</option>`;
+    }
+
+    return optionsHtml;
+}
+
+/**
+ * Sends an updated configuration payload to the server.
+ * @param {String} nodeId - The 32-bit Node ID.
+ * @param {String} target - Either 'PARENT' or 'SUBMODULE'.
+ * @param {Number} subModIdx - The index of the sub-module (if applicable).
+ * @param {Object} payload - The complete data object for the parent or sub-module.
+ */
+function sendConfigUpdate(nodeId, target, subModIdx, payload) {
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+        console.error("Cannot send update, WebSocket is not open.");
+        return;
+    }
+
+    const message = {
+        type: 'UPDATE_NODE_CONFIG',
+        nodeId: nodeId,
+        configTarget: target, // 'PARENT' or 'SUBMODULE'
+        subModIdx: subModIdx, // null if updating parent
+        payload: payload
+    };
+
+    socket.send(JSON.stringify(message));
+}
+
+/**
+ * Instructs the server to construct CAN messages and save the node config to the bus.
+ * @param {String} nodeId - The 32-bit Node ID.
+ */
+function persistNodeToBus(nodeId) {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    
+    socket.send(JSON.stringify({
+        type: 'SAVE_TO_BUS',
+        nodeId: nodeId
+    }));
+    
+    alert(`Instructed server to persist Node ${nodeId} to CAN-bus.`);
+}
 
 /**
  * Visual feedback that server has received and processed the update.
@@ -360,75 +440,237 @@ function saveNodeUpdate(nodeId, subIdx, msgHex, rawArray, dlcVal) {
 }
 
 /**
- * Refactored database renderer
- * @param {Object} db - The database object from the server
+ * Renders the inline editor for the Node database.
+ * @param {Object} nodes - The CAN node database object.
  */
-function renderNodeDatabase(db) {
-    const editorContainer = document.getElementById('editor-container');
-    // Clear existing (except headers)
-    while (editorContainer.children.length > 4) {
-        editorContainer.removeChild(editorContainer.lastChild);
-    }
+function renderNodeDatabase(nodes) {
+    const container = document.getElementById('editor-container');
+    if (!container) return;
 
-    Object.entries(db).forEach(([key, node]) => {
-        const nodeId = node.nodeId || 'Unknown';
+    // Preserve headers and clear out previous rows
+    container.innerHTML = `
+        <div class="header-cell">Command</div>
+        <div class="header-cell">ID (Hex)</div>
+        <div class="header-cell">Data (Config)</div>
+        <div class="header-cell">DLC</div>        
+    `;
+
+    for (const [nodeId, nodeData] of Object.entries(nodes)) {
+        const isExpanded = expandedNodes.has(nodeId);
         
-        // Parent Row
-        const parentCells = [
-            // Change the button HTML string to include 'event'
-            { html: `<button class="compact-btn" title="Toggle Sub-module Display" onclick="toggleSubModules(event, '${nodeId}')">+</button>
-                     <button class="compact-btn" title="re-Interview Node" onclick="requestNodeInterview('${nodeId}')">I</button>
-                     <button class="compact-btn" title="Remove From Database" onclick="requestRemoveNode('${nodeId}')">X</button>
-                     <button class="compact-btn" title="Send CAN Command" onclick="nodeSendCanCommand('${nodeId}')">C</button>`,
-                    class: 'node-parent'
-            },
-            { html: `ID: ${nodeId}`, class: 'node-parent hex-id' },
-            { html: `Type: 0x${node.nodeTypeMsg.toString(16).toUpperCase() + ' Sub modules: ' + node.subModCnt + ' Config CRC: ' + node.configCrc}`, class: 'node-parent' },
-            { html: node.nodeTypeDlc, class: 'node-parent' }
-        ];
+        // --- Render PARENT NODE Row ---
+        
+        // Command Column: Expand/Collapse and Persist
+        /** create the cell for the buttons */
+        const cmdCell = document.createElement('div');
+        cmdCell.className = 'editor-cell';
+        cmdCell.classList.add('data-cell');
+        cmdCell.id = `node-${nodeId}-cmd`;
+        cmdCell.innerHTML = `
+            <button onclick="toggleNode('${nodeId}')" style="margin-right: 5px;">
+                ${isExpanded ? '[-]' : '[+]'}
+            </button>
+            <button onclick="persistNodeToBus('${nodeId}')">Persist</button>
+        `;
 
-        parentCells.forEach(cell => {
-            const div = document.createElement('div');
-            div.className = `data-cell ${cell.class}`;
-            div.innerHTML = cell.html;
-            editorContainer.appendChild(div);
-        });
+        // ID Column
+        const idCell = document.createElement('div');
+        idCell.className = 'editor-cell data-cell hex-id';
+        idCell.id = `node-${nodeId}-id`;
+        idCell.innerText = nodeId.toUpperCase();
 
-        /* === Sub-Module Rows === */
-        Object.values(node.subModule).forEach(sub => {
-            const subKey = `${nodeId}-${sub.subModIdx}`;
+        // Data Column: Inline editing for Node Type and Sub-Module Count
+        const dataCell = document.createElement('div');
+        dataCell.id = `node-${nodeId}-data`;
+        dataCell.className = 'editor-cell';
+        dataCell.classList.add('data-cell');
 
-            const subCells = [
-                { html:  `<button class="compact-btn" title="Edit Sub-module" onclick="editSubModule(event,'${nodeId}',${sub.subModIdx})">E</button>
-                        <button class="compact-btn" title="Abort Edit" onclick="closeEditor(event, '${nodeId}', ${sub.subModIdx})">X</button>`, 
-                class: 'sub-module-row' 
-                },
-                { html:  `Idx: ${sub.subModIdx.toString().padStart(SMALL_BYTE_WDH, '0')}`, 
-                class: 'sub-module-row' 
-                },
-                { html:  `DataMsgId (hex): <span id="msg-${subKey}">${sub.dataMsgId.toString(16).toUpperCase()}</span>
-                          Raw Config (hex): <span id="raw-${subKey}">${
-                            sub.rawConfig.map(val => val.toString(16).toUpperCase().padStart(HEX_BYTE_LENGTH, '0')).join(',')
-                        }</span>`, 
-                class: 'sub-module-row' 
-                },
-                { html:  `<span id="dlc-${subKey}">${sub.dataMsgDlc}</span>`, 
-                class: 'sub-module-row' 
+        
+        // Node Type Dropdown (Range 0x780 - 0x79F)
+        const nodeTypeSelect = document.createElement('select');
+        nodeTypeSelect.name = `node-${nodeId}-type`;
+        nodeTypeSelect.classList.add('editor-input');
+        nodeTypeSelect.classList.add('cell-input');
+        nodeTypeSelect.innerHTML = buildDropdown(allDefinitions, 0x780, 0x79F, nodeData.nodeTypeMsg);
+        
+        // Sub-module Count Input
+        const subModCntInput = document.createElement('input');
+        subModCntInput.name = 'submod-cnt-' + nodeId;
+        subModCntInput.classList.add('editor-input');
+        subModCntInput.classList.add('cell-input');
+        subModCntInput.type = 'number';
+        subModCntInput.min = '0';
+        subModCntInput.max = '8';
+        subModCntInput.value = nodeData.subModCnt;
+        subModCntInput.style.width = '40px';
+
+        dataCell.innerHTML = `<label class="label">Type:</label>`;
+        dataCell.appendChild(nodeTypeSelect);
+        dataCell.innerHTML += `<label class="label">Sub-Mods:</label>`;
+        dataCell.appendChild(subModCntInput);
+
+        // DLC Column: Inline editing for Node DLC
+        const dlcCell = document.createElement('div');
+        dlcCell.id = `node-${nodeId}-dlc`;
+        dlcCell.className = 'editor-cell data-cell';
+        const dlcInput = document.createElement('input');
+        dlcInput.classList.add('editor-input');
+        dlcInput.name = 'dlc-' + nodeId;
+        dlcInput.type = 'number';
+        dlcInput.min = '0';
+        dlcInput.max = '8';
+        dlcInput.value = nodeData.nodeTypeDlc;
+        dlcInput.style.width = '40px';
+        dlcCell.appendChild(dlcInput);
+
+        // Bind PARENT changes to send update
+        const handleParentChange = () => {
+            const updatedParent = {
+                ...nodeData, // Keep existing fields
+                nodeTypeMsg: parseInt(nodeTypeSelect.value, 10),
+                subModCnt: parseInt(subModCntInput.value, 10),
+                nodeTypeDlc: parseInt(dlcInput.value, 10)
+            };
+            sendConfigUpdate(nodeId, 'PARENT', null, updatedParent);
+        };
+
+        nodeTypeSelect.onchange = handleParentChange;
+        subModCntInput.onchange = handleParentChange;
+        dlcInput.onchange = handleParentChange;
+
+        // Append Parent Row to Grid
+        container.append(cmdCell, idCell, dataCell, dlcCell);
+
+        // --- Render SUB-MODULE Rows (If Expanded) ---
+        if (isExpanded && nodeData.subModule) {
+            for (const [idxStr, subMod] of Object.entries(nodeData.subModule)) {
+                const idx = parseInt(idxStr, 10);
+                
+                const subCmdCell = document.createElement('div');
+                subCmdCell.id = `node-${nodeId}-sub-${idx}-cmd`;
+                subCmdCell.className = 'data-cell';
+                subCmdCell.style.textAlign = 'right';
+                subCmdCell.innerHTML = `↳ Sub-module`; // Visual indicator
+
+                const subIdCell = document.createElement('div');
+                subIdCell.className = 'data-cell';
+                subIdCell.id = `node-${nodeId}-sub-${idx}-id`;
+                subIdCell.innerText = idxStr.toUpperCase();
+                
+                // Data Column for Sub-module, container for the two rows created below
+                const subDataCell = document.createElement('div');
+                subDataCell.id = `node-${nodeId}-sub-${idx}-data`;
+                subDataCell.className = 'data-cell';
+                subDataCell.style.display = 'flex';
+                subDataCell.style.justifyContent = 'flex-start';
+                subDataCell.style.alignItems = 'left';
+                subDataCell.style.flexDirection = 'column'; // Stack rows vertically
+                subDataCell.style.gap = '8px';
+                
+                // Row 1: Intro and Data ID
+                const row1 = document.createElement('div');
+                row1.className = 'label-row';
+                row1.id = `node-${nodeId}-sub-${idx}-row1`;
+                row1.style.display = 'flex';
+                row1.style.gap = '10px';
+                row1.style.alignItems = 'center';
+
+                const introSelect = document.createElement('select');
+                introSelect.name = `node-${nodeId}-sub-${idx}-intro`;
+                introSelect.className = 'editor-input';
+                introSelect.innerHTML = buildDropdown(allDefinitions, 0x700, 0x77F, subMod.introMsgId);
+                
+                const dataIdSelect = document.createElement('select');
+                dataIdSelect.name = `node-${nodeId}-sub-${idx}-data-id`;
+                dataIdSelect.className = 'editor-input';
+                dataIdSelect.innerHTML = buildDropdown(allDefinitions, 0x110, 0x5FF, subMod.dataMsgId);
+
+                row1.innerHTML = `<label>Intro:</label>`;
+                row1.appendChild(introSelect);
+                row1.innerHTML += `<label>Data ID:</label>`;
+                row1.appendChild(dataIdSelect);
+
+                // Row 2: Raw Config Bytes
+                const row2 = document.createElement('div');
+                row2.id = `node-${nodeId}-sub-${idx}-row2`;
+                row2.className = 'label-row';
+                row2.style.display = 'flex';
+                row2.style.gap = '10px';
+                row2.style.alignItems = 'center';
+                // row2.style.height = '12px';
+                row2.innerHTML = `<label>Raw Config:</label>`;
+
+                const rawInputs = [];
+                for (let i = 0; i < 3; i++) {
+                    const byteInput = document.createElement('input');
+                    byteInput.name = `node-${nodeId}-sub-${idx}-raw-${i}`;
+                    byteInput.type = 'number';
+                    byteInput.className = 'editor-input';
+                    byteInput.min = '0';
+                    byteInput.max = '255';
+                    byteInput.value = subMod.rawConfig ? subMod.rawConfig[i] : 0;
+                    byteInput.style.width = '50px';
+                    rawInputs.push(byteInput);
+                    row2.appendChild(byteInput);
                 }
-            ];
 
-            subCells.forEach(cell => {
-                const div = document.createElement('div');
-                /** * Ensure each cell has the sub-module-row class 
-                 * and the specific node toggle class.
-                 */
-                div.className = `data-cell ${cell.class} node-${nodeId}`; 
-                div.innerHTML = cell.html;
-                editorContainer.appendChild(div);
-            });
-        });
-    });
+                // Add both rows to the Data cell
+                subDataCell.appendChild(row1);
+                subDataCell.appendChild(row2);
+
+                // Sub-module DLC
+                const subDlcCell = document.createElement('div');
+                subDlcCell.className = 'data-cell';
+                const subDlcInput = document.createElement('input');
+                subDlcInput.type = 'number';
+                subDlcInput.className = 'editor-input';
+                subDlcInput.min = '0';
+                subDlcInput.max = '8';
+                subDlcInput.value = subMod.dataMsgDlc;
+                subDlcInput.style.width = '40px';
+                subDlcCell.appendChild(subDlcInput);
+
+                // Bind SUB-MODULE changes to send update
+                const handleSubModChange = () => {
+                    const updatedSubMod = {
+                        ...subMod,
+                        introMsgId: parseInt(introSelect.value, 10),
+                        dataMsgId: parseInt(dataIdSelect.value, 10),
+                        dataMsgDlc: parseInt(subDlcInput.value, 10),
+                        rawConfig: [
+                            parseInt(rawInputs[0].value, 10),
+                            parseInt(rawInputs[1].value, 10),
+                            parseInt(rawInputs[2].value, 10)
+                        ]
+                    };
+                    sendConfigUpdate(nodeId, 'SUBMODULE', idx, updatedSubMod);
+                };
+
+                introSelect.onchange = handleSubModChange;
+                dataIdSelect.onchange = handleSubModChange;
+                subDlcInput.onchange = handleSubModChange;
+                rawInputs.forEach(input => input.onchange = handleSubModChange);
+
+                container.append(subCmdCell, subIdCell, subDataCell, subDlcCell);
+            }
+        }
+    }
 }
+
+/**
+ * Toggles the accordion state for a given Node ID
+ * @param {String} nodeId 
+ */
+window.toggleNode = function(nodeId) {
+    if (expandedNodes.has(nodeId)) {
+        expandedNodes.delete(nodeId);
+    } else {
+        expandedNodes.add(nodeId);
+    }
+    // Re-render immediately to show/hide submodules (assuming 'nodes' is stored globally)
+    // If your app holds `window.currentNodes`, call renderNodeDatabase(window.currentNodes) here.
+    renderNodeDatabase(nodeDb);
+};
 
 /**
  * Toggles visibility of sub-modules for a specific node ID

@@ -544,62 +544,70 @@ function getSubModuleHistory(nodeId, subIdx) {
 }
 
 /**
- * Processes configuration updates, sends CAN messages, and archives snapshots in SQLite.
- * @param {WebSocket} ws - The specific client connection to respond to.
- * @param {Object} data - The payload containing nodeId, subModIdx, etc.
+ * Processes an incoming configuration update from the client editor.
+ * Compares incoming data with in-memory data to prevent redundant updates.
+ * @param {Object} msg - The parsed WebSocket message object.
  */
-function handleNodeConfigUpdate(ws, data) {
-    const { nodeId, subModIdx, dataMsgId, rawConfig, dataMsgDlc } = data;
+function handleNodeConfigUpdate(msg) {
+    const { nodeId, configTarget, subModIdx, payload } = msg;
 
-    const nodeData = canDatabase[nodeId]; 
-    if (nodeData === undefined) {
-    console.error(`Update failed: Node ${nodeId} not found.`);
-    return;
-}
-    const targetSub = nodeData.subModule[subModIdx];
-    let hasChanged = false;
-
-    /** * 1. Handle DataMsgId or DLC changes
-     */
-    if (targetSub.dataMsgId !== dataMsgId || targetSub.dataMsgDlc !== dataMsgDlc) {
-        /* Log change to audit trail */
-        if (targetSub.dataMsgId !== dataMsgId) {
-            logManualChange(nodeId, subModIdx, 'dataMsgId', targetSub.dataMsgId, dataMsgId);
-        }
-        if (targetSub.dataMsgDlc !== dataMsgDlc) {
-            logManualChange(nodeId, subModIdx, 'dataMsgDlc', targetSub.dataMsgDlc, dataMsgDlc);
-        }
-
-        const canPayload = Buffer.alloc(CAN_MSG.CFG_SUB_DATA_MSG_DLC);
-        Buffer.from(nodeId, 'hex').copy(canPayload, NODE_ID_OFFSET); 
-        canPayload.writeUInt8(subModIdx, SUBMODID_OFFSET);      
-        canPayload.writeUInt16BE(dataMsgId, SUBMOD_DATAMSGID_MSB_OFFSET);   
-        canPayload.writeUInt8(dataMsgDlc, SUBMOD_DATAMSGDLC_OFFSET);     
-
-        channel.send({ id: CAN_MSG.CFG_SUB_DATA_MSG_ID, data: canPayload });
-        
-        targetSub.dataMsgId  = dataMsgId;
-        targetSub.dataMsgDlc = dataMsgDlc;
-        hasChanged = true;
+    // Assuming your in-memory database is called `nodeDatabase`
+    if (!nodeDatabase[nodeId]) {
+        console.warn(`[Config Update] Node ${nodeId} not found in database.`);
+        return;
     }
 
-    /** * 2. Handle Raw Config changes 
-     */
-    if (JSON.stringify(targetSub.rawConfig) !== JSON.stringify(rawConfig)) {
-        logManualChange(nodeId, subModIdx, 'rawConfig', targetSub.rawConfig, rawConfig);
-        
-        const canPayload = Buffer.alloc(CAN_MSG.CFG_SUB_RAW_DATA_DLC);
-        Buffer.from(nodeId, 'hex').copy(canPayload, NODE_ID_OFFSET); 
-        canPayload.writeUInt8(subModIdx, SUBMODID_OFFSET);
+    let hasChanges = false;
+    const targetNode = nodeDatabase[nodeId];
 
-        /* Copy the array of bytes directly into the buffer */
-        Buffer.from(rawConfig).copy(canPayload, SUBMOD_RAW0_OFFSET);
+    if (configTarget === 'PARENT') {
+        // Compare parent fields
+        if (targetNode.nodeTypeMsg !== payload.nodeTypeMsg ||
+            targetNode.nodeTypeDlc !== payload.nodeTypeDlc ||
+            targetNode.subModCnt !== payload.subModCnt) {
+            
+            // Apply updates
+            targetNode.nodeTypeMsg = payload.nodeTypeMsg;
+            targetNode.nodeTypeDlc = payload.nodeTypeDlc;
+            targetNode.subModCnt = payload.subModCnt;
+            
+            hasChanges = true;
+        }
         
-        channel.send({ id: CAN_MSG.CFG_SUB_RAW_DATA_ID, data: canPayload });
-        
-        targetSub.rawConfig = rawConfig;
-        hasChanged = true;
+    } else if (configTarget === 'SUBMODULE') {
+        // Ensure subModule object exists
+        if (!targetNode.subModule) {
+            targetNode.subModule = {};
+        }
+        if (!targetNode.subModule[subModIdx]) {
+            targetNode.subModule[subModIdx] = {}; // Initialize if brand new
+            hasChanges = true; 
+        }
+
+        const targetSub = targetNode.subModule[subModIdx];
+
+        // Compare standard sub-module fields
+        if (targetSub.introMsgId !== payload.introMsgId ||
+            targetSub.dataMsgId !== payload.dataMsgId ||
+            targetSub.dataMsgDlc !== payload.dataMsgDlc) {
+            
+            targetSub.introMsgId = payload.introMsgId;
+            targetSub.dataMsgId = payload.dataMsgId;
+            targetSub.dataMsgDlc = payload.dataMsgDlc;
+            hasChanges = true;
+        }
+
+        // Deep compare the rawConfig array (3 bytes)
+        if (!targetSub.rawConfig) targetSub.rawConfig = [0, 0, 0];
+        for (let i = 0; i < 3; i++) {
+            if (targetSub.rawConfig[i] !== payload.rawConfig[i]) {
+                targetSub.rawConfig[i] = payload.rawConfig[i];
+                hasChanges = true;
+            }
+        }
     }
+
+    const hasChanged = hasChanges;
 
     /** * 3. Atomic Database Sync and History Snapshot
      */
@@ -689,14 +697,27 @@ function sendRequestIntro() {
     lastReqIntro = Date.now();
 }
 
+/**
+ * Synchronizes the in-memory database to the local JSON file.
+ */
+function saveDatabaseToFile() {
+    fs.writeFile('./can-node-database.json', JSON.stringify(canDatabase, null, 4), (err) => {
+        if (err) {
+            console.error('Failed to save database to disk:', err);
+        } else {
+            console.log('Database successfully persisted to disk.');
+        }
+    });
+}
+
 function handlePeroidicMessages() {
     if (Date.now() - lastReqIntro > maxReqIntro) {
-        // saveDatabaseToFile(); /* write database to disk */
         sendRequestIntro(); /* initiate network scan */
     }
 
     if (Date.now() - lastTsMsg > sendTsInterval) {
         writeCanMessageBE(CAN_MSG.DATA_EPOCH_ID, getTimestampPayload());
+        // saveDatabaseToFile(); /* write database to disk */
         lastTsMsg = Date.now();
     }
 }
