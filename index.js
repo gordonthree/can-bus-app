@@ -339,6 +339,18 @@ db.exec(`
         category TEXT,
         description TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS node_submodules ( 
+        id INTEGER PRIMARY KEY AUTOINCREMENT, 
+        node_id TEXT NOT NULL, 
+        sub_index INTEGER NOT NULL, 
+        personality_id INTEGER NOT NULL, 
+        config_byte0 INTEGER, 
+        config_byte1 INTEGER, 
+        config_byte2 INTEGER, 
+        updated_at INTEGER DEFAULT (strftime('%s','now') * 1000), 
+        UNIQUE (node_id, sub_index), 
+        FOREIGN KEY (node_id) REFERENCES node_inventory(node_id) );
 `);
 
 /** Fetch 20 most recent audits joined with their comments */
@@ -809,7 +821,6 @@ function updateNodeDatabase(msg) {
             recordNodeSnapshot(nodeString, myNode);
         }
         
-
         /* Update memory with the latest bus data */
         myNode.nodeId          = nodeString;
         myNode.lastSeen        = Date.now(); 
