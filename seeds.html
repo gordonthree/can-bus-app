@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Database Seeder</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; }
+        table { border-collapse: collapse; margin-bottom: 30px; width: 100%; }
+        th, td { border: 1px solid #ccc; padding: 6px 10px; }
+        th { background: #eee; }
+        h2 { margin-top: 40px; }
+        form { margin-bottom: 10px; }
+        input[type="text"], input[type="number"] { width: 200px; }
+    </style>
+</head>
+<body>
+
+<h1>Database Seeder</h1>
+
+<!-- Fields -->
+<h2>Fields</h2>
+<form id="fieldsForm">
+    <input type="text" name="name" placeholder="Field Name" required>
+    <input type="number" name="input_type" placeholder="Input Type" required>
+    <input type="text" name="description" placeholder="Description">
+    <button>Add Field</button>
+</form>
+<table id="fieldsTable">
+    <thead><tr><th>ID</th><th>Name</th><th>Type</th><th>Description</th></tr></thead>
+    <tbody></tbody>
+</table>
+
+<!-- Field Options -->
+<h2>Field Options</h2>
+<form id="fieldOptionsForm">
+    <input type="number" name="field_id" placeholder="Field ID" required>
+    <input type="number" name="option_value" placeholder="Value" required>
+    <input type="text" name="option_label" placeholder="Label" required>
+    <button>Add Option</button>
+</form>
+<table id="fieldOptionsTable">
+    <thead><tr><th>ID</th><th>Field ID</th><th>Value</th><th>Label</th></tr></thead>
+    <tbody></tbody>
+</table>
+
+<!-- Personalities -->
+<h2>Personalities</h2>
+<form id="personalitiesForm">
+    <input type="number" name="personality_id" placeholder="ID (hex ok)" required>
+    <input type="text" name="name" placeholder="Name" required>
+    <input type="number" name="cfg_msg_id" placeholder="Cfg Msg ID" required>
+    <input type="number" name="cfg_msg_dlc" placeholder="DLC" required>
+    <button>Add Personality</button>
+</form>
+<table id="personalitiesTable">
+    <thead><tr><th>ID</th><th>Name</th><th>Cfg Msg ID</th><th>DLC</th></tr></thead>
+    <tbody></tbody>
+</table>
+
+<!-- Personality Fields -->
+<h2>Personality Fields</h2>
+<form id="personalityFieldsForm">
+    <input type="number" name="personality_id" placeholder="Personality ID" required>
+    <input type="number" name="field_index" placeholder="Index (0-2)" required>
+    <input type="number" name="field_id" placeholder="Field ID" required>
+    <button>Add Mapping</button>
+</form>
+<table id="personalityFieldsTable">
+    <thead><tr><th>ID</th><th>Personality</th><th>Index</th><th>Field</th></tr></thead>
+    <tbody></tbody>
+</table>
+
+<script>
+async function postForm(form, url, table) {
+    const data = Object.fromEntries(new FormData(form).entries());
+    const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data)
+    });
+    const json = await res.json();
+    if (json.error) return alert(json.error);
+    loadTables();
+}
+
+async function loadTables() {
+    const endpoints = [
+        ["fieldsTable", "/api/seed/fields"],
+        ["fieldOptionsTable", "/api/seed/field_options"],
+        ["personalitiesTable", "/api/seed/personalities"],
+        ["personalityFieldsTable", "/api/seed/personality_fields"]
+    ];
+
+    for (const [name, url] of endpoints) {
+        const res = await fetch(url);
+        const rows = await res.json();
+        const tbody = document.querySelector(`#${name}Table tbody`);
+        tbody.innerHTML = "";
+        rows.forEach(r => {
+            const tr = document.createElement("tr");
+            Object.values(r).forEach(v => {
+                const td = document.createElement("td");
+                td.textContent = v;
+                tr.appendChild(td);
+            });
+            tbody.appendChild(tr);
+        });
+    }
+}
+
+document.getElementById("fieldsForm").onsubmit = e => { e.preventDefault(); postForm(e.target, "/api/seed/fields"); };
+document.getElementById("fieldOptionsForm").onsubmit = e => { e.preventDefault(); postForm(e.target, "/api/seed/field_options"); };
+document.getElementById("personalitiesForm").onsubmit = e => { e.preventDefault(); postForm(e.target, "/api/seed/personalities"); };
+document.getElementById("personalityFieldsForm").onsubmit = e => { e.preventDefault(); postForm(e.target, "/api/seed/personality_fields"); };
+
+loadTables();
+</script>
+
+</body>
+</html>

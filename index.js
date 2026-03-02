@@ -1,3 +1,7 @@
+import express from 'express';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
+
 import can from 'socketcan';
 import { WebSocketServer } from 'ws';
 import http from 'http';
@@ -10,8 +14,6 @@ import Database from 'better-sqlite3';
 
 
 /* === Constants === */
-
-/* === CSV Import Constants === */
 
 /** Number of rows to skip (5 spacer lines + 1 header line) */
 const CSV_HEADER_OFFSET = 6;
@@ -181,29 +183,138 @@ const interval = setInterval(() => {
     });
 }, HEARTBEAT_INTERVAL);
 
-// 1. Static HTTP Server to serve HTML/JS files
-const server = http.createServer((req, res) => {
-    let filePath = req.url === '/' ? './index.html' : `.${req.url}`;
-    const extname = path.extname(filePath);
-    
-    // Basic MIME type mapping
-    const contentType = extname === '.js' ? 'text/javascript' : 'text/html';
+// Needed for __dirname in ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-    fs.readFile(filePath, (error, content) => {
-        if (error) {
-            res.writeHead(404);
-            res.end('File not found');
-        } else {
-            res.writeHead(200, { 'Content-Type': contentType });
-            res.end(content, 'utf-8');
-        }
-        return;
+// Create Express app
+const app = express();
+
+// Middleware
+app.use(express.json());
+
+// Serve static files from your project root (or /public if you prefer)
+app.use(express.static(path.join(__dirname)));
+
+// ------------------------------------
+// Existing API endpoints
+// ------------------------------------
+
+// app.get('/api/nodes', ...);
+// app.post('/api/updateConfig', ...);
+
+// ------------------------------------
+// NEW: Seeding endpoints
+// ------------------------------------
+
+app.post('/api/seed/fields', (req, res) => {
+    console.log("Hit /api/seed/fields");
+    const { name, input_type, description } = req.body;
+
+    db.run(`
+        INSERT INTO fields (name, input_type, description)
+        VALUES (?, ?, ?)
+    `, [name, input_type, description], function (err) {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ id: this.lastID });
     });
 });
+
+app.post('/api/seed/field_options', (req, res) => {
+    const { field_id, option_value, option_label } = req.body;
+
+    db.run(`
+        INSERT INTO field_options (field_id, option_value, option_label)
+        VALUES (?, ?, ?)
+    `, [field_id, option_value, option_label], function (err) {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ id: this.lastID });
+    });
+});
+
+app.post('/api/seed/personalities', (req, res) => {
+    const { personality_id, name, cfg_msg_id, cfg_msg_dlc } = req.body;
+
+    db.run(`
+        INSERT INTO personalities (personality_id, name, cfg_msg_id, cfg_msg_dlc)
+        VALUES (?, ?, ?, ?)
+    `, [personality_id, name, cfg_msg_id, cfg_msg_dlc], function (err) {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ id: personality_id });
+    });
+});
+
+app.post('/api/seed/personality_fields', (req, res) => {
+    const { personality_id, field_index, field_id } = req.body;
+
+    db.run(`
+        INSERT INTO personality_fields (personality_id, field_index, field_id)
+        VALUES (?, ?, ?)
+    `, [personality_id, field_index, field_id], function (err) {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ id: this.lastID });
+    });
+});
+
+// ------------------------------------
+// GET endpoints for seed UI
+// ------------------------------------
+
+// Get all fields
+app.get('/api/seed/fields', (req, res) => {
+    try {
+        const rows = db.prepare(`SELECT * FROM fields ORDER BY field_id`).all();
+        res.json(rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Get all field options
+app.get('/api/seed/field_options', (req, res) => {
+    try {
+        const rows = db.prepare(`SELECT * FROM field_options ORDER BY option_id`).all();
+        res.json(rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Get all personalities
+app.get('/api/seed/personalities', (req, res) => {
+    try {
+        const rows = db.prepare(`SELECT * FROM personalities ORDER BY personality_id`).all();
+        res.json(rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Get all personality-field mappings
+app.get('/api/seed/personality_fields', (req, res) => {
+    try {
+        const rows = db.prepare(`
+            SELECT id, personality_id, field_index, field_id
+            FROM personality_fields
+            ORDER BY personality_id, field_index
+        `).all();
+        res.json(rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+
+// ------------------------------------
+// Start server
+// ------------------------------------
+// Wrap Express in an HTTP server
+const server = http.createServer(app);
 
 server.listen(HTTP_PORT, () => {
     console.log(`Web UI available at http://cancontrol:${HTTP_PORT}`);
 });
+
 
 wss.on('connection', (ws) => {
     /** Set initial liveness for the heartbeat cleanup logic */
@@ -340,18 +451,49 @@ db.exec(`
         description TEXT
     );
 
-    CREATE TABLE IF NOT EXISTS node_submodules ( 
-        id INTEGER PRIMARY KEY AUTOINCREMENT, 
-        node_id TEXT NOT NULL, 
-        sub_index INTEGER NOT NULL, 
-        personality_id INTEGER NOT NULL, 
-        config_byte0 INTEGER, 
-        config_byte1 INTEGER, 
-        config_byte2 INTEGER, 
-        updated_at INTEGER DEFAULT (strftime('%s','now') * 1000), 
-        UNIQUE (node_id, sub_index), 
-        FOREIGN KEY (node_id) REFERENCES node_inventory(node_id) );
+    CREATE TABLE IF NOT EXISTS node_submodules (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        node_id TEXT NOT NULL,
+        sub_index INTEGER NOT NULL,
+        personality_id INTEGER NOT NULL,
+        config_byte0 INTEGER,
+        config_byte1 INTEGER,
+        config_byte2 INTEGER,
+        data_msg_id INTEGER,
+        data_msg_dlc INTEGER,
+        save_state INTEGER,
+        updated_at INTEGER DEFAULT (strftime('%s','now') * 1000),
+        UNIQUE (node_id, sub_index),
+        FOREIGN KEY (node_id) REFERENCES node_inventory(node_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS personalities (
+        personality_id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        cfg_msg_id INTEGER NOT NULL,
+        cfg_msg_dlc INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS personality_fields (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        personality_id INTEGER NOT NULL,
+        field_index INTEGER NOT NULL,
+        label TEXT NOT NULL,
+        input_type INTEGER NOT NULL,
+        FOREIGN KEY (personality_id) REFERENCES personalities(personality_id)
+    );
+
+
+
 `);
+
+/** Add sub-module data to submodules table */
+const insertSubmoduleIntended = db.prepare(`
+    INSERT OR IGNORE INTO node_submodules
+        (node_id, sub_index, personality_id, config_byte0, config_byte1, config_byte2)
+    VALUES (?, ?, ?, ?, ?, ?)
+`);
+
 
 /** Fetch 20 most recent audits joined with their comments */
 const selectRecentAudit = db.prepare(`
@@ -523,6 +665,12 @@ function syncNodeToDatabase(nodeId, nodeData) {
         nodeData.lastSeen,
         JSON.stringify(nodeData.subModule)
     );
+
+    // NEW: Initialize intended config for each sub-module 
+    for (let i = 0; i < nodeData.subModCnt; i++) { 
+        const sub = nodeData.subModule[i]; 
+        // insertSubmoduleIntended.run( nodeId, i, sub.introMsgId , sub.rawConfig[0], sub.rawConfig[1], sub.rawConfig[2] ); 
+    }
 }
 
 /**
@@ -978,3 +1126,4 @@ channel.start();
 
 /** Initialize definitions on startup */
 importMessageDefinitions('./can bus messages - Messages.csv');
+

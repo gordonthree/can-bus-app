@@ -27,19 +27,18 @@ const SUBMOD_CNT_MIN = 0;
 /** Maxiumum number of sub modules */
 const SUBMOD_CNT_MAX = 8;
 
-/** First node intro message value 0x780 */
-const NODE_INTRO_MSG_BEGIN = 0x780;
-/** Last node intro message value 0x7FF */
-const NODE_INTRO_MSG_END   = 0x7FF;
-
 /** Sub module intro messages begin at 0x700 */
 const SUBMOD_INTRO_BEGIN = 0x700;
 /** Sub module intro messages end at 0x77F */
 const SUBMOD_INTRO_END   = 0x77F;
 
+/** First node intro message value 0x780 */
+const NODE_INTRO_MSG_BEGIN = 0x780;
+/** Last node intro message value 0x7FF */
+const NODE_INTRO_MSG_END   = 0x7FF;
+
 /** Data messages start at 0x110 */
 const SUBMOD_DATA_BEGIN = 0x110;
-
 /** Data messages end at 0x5FF */
 const SUBMOD_DATA_END   = 0x5FF;
 
