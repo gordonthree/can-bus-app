@@ -277,6 +277,19 @@ wss.on('connection', (ws) => {
             type: 'DATABASE_UPDATE',
             payload: canDatabase /* Reference to the live in-memory object */
         }));
+
+
+        // Send normalized metadata tables
+        ws.send(JSON.stringify({
+            type: 'DEFINITION_METADATA',
+            payload: {
+                personalities: selectAllPersonalities.all(),
+                fields: selectAllFields.all(),
+                personality_fields: selectAllPersonalityFields.all(),
+                field_options: selectAllFieldOptions.all()
+            }
+        }));
+        
     
         broadcastAuditLog();
     }
@@ -327,6 +340,18 @@ wss.on('connection', (ws) => {
                         console.log(`Sent REQ_NODE_INTRO (0x401) to node: ${nodeString}`);
                     }
                     break;
+                    case 'GET_METADATA':
+                        ws.send(JSON.stringify({
+                            type: 'DEFINITION_METADATA',
+                            payload: {
+                                personalities: selectAllPersonalities.all(),
+                                fields: selectAllFields.all(),
+                                personality_fields: selectAllPersonalityFields.all(),
+                                field_options: selectAllFieldOptions.all()
+                            }
+                        }));
+                        break;
+
                 default:
                     console.warn(`Unknown message type: ${request.type}`);
             }
@@ -339,6 +364,11 @@ wss.on('connection', (ws) => {
 wss.on('close', () => clearInterval(interval));
 
 
+/* === Prepared SQL statements */
+const selectAllPersonalities = db.prepare("SELECT * FROM personalities");
+const selectAllFields = db.prepare("SELECT * FROM fields");
+const selectAllPersonalityFields = db.prepare("SELECT * FROM personality_fields");
+const selectAllFieldOptions = db.prepare("SELECT * FROM field_options");
 
 
 /** Fetch 20 most recent audits joined with their comments */

@@ -113,7 +113,6 @@ const PERSONALITY_MAP_LABELS = {
     0x70A: ["Output Pin", "Blink/PWM Rate", "Output Mode"], /* Digital output */
     0x70B: ["Reserved", "Reserved", "Reserved"], /* LCD Display */
     0x744: ["Output Pin", "Blink/PWM Rate", "Output Mode"]
-
 };
 
 /** Input types for each sub-module personality 0 = read-only, 1 = numeric, 2 = dropdown */
@@ -179,21 +178,34 @@ document.addEventListener('DOMContentLoaded', () => {
 
         /** Route message based on the 'type' property. */
         switch (message.type) {
+            case 'DEFINITION_METADATA':
+                window.meta = message.payload;
+                tryDBRender(); /* Attempt to render the node database */
+
+                console.log(
+                    `Metadata loaded: ` +
+                    `${meta.personalities.length} personalities, ` +
+                    `${meta.fields.length} fields, ` +
+                    `${meta.personality_fields.length} personality-field links, ` +
+                    `${meta.field_options.length} field options.`
+                );
+                break;
+
             case 'DEFINITIONS_LIST':
                 allDefinitions = message.payload;
                 /** Populate a global Map for O(1) UI lookups */
                 window.definitionsMap = new Map(allDefinitions.map(d => [d.id_dec, d]));
                 console.log(`Definitions cached: ${allDefinitions.length} entries.`);
+                tryDBRender(); /* Attempt to render the node database */
+
                 break;
 
             case 'DATABASE_UPDATE':
                 /** * We don't render until we have definitions to ensure 
                  * dropdowns and labels have the data they need.
                  */
-                if (allDefinitions.length > 0) {
-                    nodeDb = message.payload;
-                    renderNodeDatabase(nodeDb);
-                }
+                nodeDb = message.payload;
+                tryDBRender(); /* Attempt to render the node database */
                 break;
 
             case 'AUDIT_LOG_UPDATE':
@@ -230,6 +242,12 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 /* === Functions === */
+
+function tryDBRender() {
+    if (allDefinitions.length > 0 && window.meta && nodeDb) {
+        renderNodeDatabase(nodeDb);
+    }
+}
 
 /**
  * Helper to build a dropdown select element.
@@ -651,15 +669,25 @@ function renderNodeDatabase(nodes) {
         /** add buttons to command cell */
         cmdCell.append(buttonExpandNode, buttonPersistNode, buttonInterviewNode);
 
-
         // 2. ID Cell
         const idCell = document.createElement('div');
         idCell.className = 'data-cell';
         idCell.classList.add('id-cell');
+        /** add coloration if node is not in sync */
+        if (!nodeData.isInSync) {
+            idCell.classList.add("mismatch");
+        } else {
+            idCell.classList.add("hex-id");
+        }
+        /** Add a badge to the node id cell to show sync status */
+        const nodeSyncBadge = document.createElement("span");
+        nodeSyncBadge.innerText = nodeData.isInSync ? "✓" : "⚠";
+        nodeSyncBadge.style.marginLeft = "8px";
+        idCell.appendChild(nodeSyncBadge);
+
 
         const idCellText = document.createElement('span');
         idCellText.innerText = nodeId.toUpperCase();
-        idCellText.className = 'hex-id';
         idCellText.style.paddingLeft = '4px';
 
         idCell.append(idCellText);
@@ -795,6 +823,10 @@ function renderNodeDatabase(nodes) {
                 subIntroMsg = buildDropdown(allDefinitions, SUBMOD_INTRO_BEGIN, SUBMOD_INTRO_END, subMod.introMsgId);
                 subIntroMsg.className = 'editor-input';
                 subIntroMsg.id = `sub-mod-${nodeId}-${idxStr}-intro-id`;
+                if (!subMod.personalityMatch) {
+                    subIntroMsg.classList.add("mismatch");
+                }
+
                 sRow1.append(introMsgLabel, subIntroMsg);
 
                 /** Data message label and select box */
@@ -824,9 +856,13 @@ function renderNodeDatabase(nodes) {
                 subDataDlc.max = DLC_MAX;
                 subDataDlc.value = subMod.dataMsgDlc;
                 subDataDlc.id = `sub-mod-${nodeId}-${idxStr}-data-dlc`;
+                if (!subMod.dataMsgDlcMatch) {
+                    subDataDlc.classList.add("mismatch");
+                }
 
                 sRow1.append(dataMsgDlcLabel, subDataDlc);
 
+                
                 /** === ROW 2: Specific Config */
                 const sRow2 = document.createElement('div');
                 sRow2.className = 'input-group';
@@ -860,8 +896,38 @@ function renderNodeDatabase(nodes) {
                     bIn.min = 0; bIn.max = 255; /* limit input to single byte values */
                     bIn.id = `sub-${nodeId}-${idxStr}-raw${i}`;
                     bIn.value = subMod.rawConfig ? subMod.rawConfig[i] : 0;
+                    if (!subMod.byteMatches[i]) {
+                        bIn.classList.add("mismatch");
+                    }
+
                     sRow2.append(bIn);
                 }
+
+
+                // const subStateBadge            = document.createElement("span");
+                // subStateBadge.innerText        = subMod.saveStateMatch ? "Save State" : "⚠ Save State";
+                // subStateBadge.style.marginLeft = "8px";
+
+                /** Label for a Save State checkbox */
+                const subSaveStateLabel        = document.createElement('span');
+                subSaveStateLabel.className    = 'label-text';
+                subSaveStateLabel.classList.add('label-text-inside');
+                subSaveStateLabel.innerText    = subMod.saveStateMatch ? "Save State:" : "⚠ Save State:";
+                // subSaveStateLabel.innerText    = "Save State:";
+
+
+                /** Save State checkbox */
+                const saveStateInput           = document.createElement('input');
+                saveStateInput.className       = 'editor-input';
+                saveStateInput.classList.add('small-input');
+                saveStateInput.type            = 'checkbox';
+                saveStateInput.checked         = subMod.saveState;
+                saveStateInput.id              = `sub-mod-${nodeId}-${idxStr}-save-state`;
+                if (!subMod.saveStateMatch) { 
+                    saveStateInput.classList.add("mismatch"); 
+                }
+
+                sRow2.append(subSaveStateLabel, saveStateInput);
 
                 /** Add row1 and row2 to stack */
                 sStack.append(sRow1, sRow2);
