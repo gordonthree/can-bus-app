@@ -197,66 +197,6 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname)));
 
 // ------------------------------------
-// Existing API endpoints
-// ------------------------------------
-
-// app.get('/api/nodes', ...);
-// app.post('/api/updateConfig', ...);
-
-// ------------------------------------
-// NEW: Seeding endpoints
-// ------------------------------------
-
-app.post('/api/seed/fields', (req, res) => {
-    console.log("Hit /api/seed/fields");
-    const { name, input_type, description } = req.body;
-
-    db.run(`
-        INSERT INTO fields (name, input_type, description)
-        VALUES (?, ?, ?)
-    `, [name, input_type, description], function (err) {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ id: this.lastID });
-    });
-});
-
-app.post('/api/seed/field_options', (req, res) => {
-    const { field_id, option_value, option_label } = req.body;
-
-    db.run(`
-        INSERT INTO field_options (field_id, option_value, option_label)
-        VALUES (?, ?, ?)
-    `, [field_id, option_value, option_label], function (err) {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ id: this.lastID });
-    });
-});
-
-app.post('/api/seed/personalities', (req, res) => {
-    const { personality_id, name, cfg_msg_id, cfg_msg_dlc } = req.body;
-
-    db.run(`
-        INSERT INTO personalities (personality_id, name, cfg_msg_id, cfg_msg_dlc)
-        VALUES (?, ?, ?, ?)
-    `, [personality_id, name, cfg_msg_id, cfg_msg_dlc], function (err) {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ id: personality_id });
-    });
-});
-
-app.post('/api/seed/personality_fields', (req, res) => {
-    const { personality_id, field_index, field_id } = req.body;
-
-    db.run(`
-        INSERT INTO personality_fields (personality_id, field_index, field_id)
-        VALUES (?, ?, ?)
-    `, [personality_id, field_index, field_id], function (err) {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ id: this.lastID });
-    });
-});
-
-// ------------------------------------
 // GET endpoints for seed UI
 // ------------------------------------
 
@@ -273,7 +213,7 @@ app.get('/api/seed/fields', (req, res) => {
 // Get all field options
 app.get('/api/seed/field_options', (req, res) => {
     try {
-        const rows = db.prepare(`SELECT * FROM field_options ORDER BY option_id`).all();
+        const rows = db.prepare(`SELECT * FROM field_options ORDER BY field_id,option_value`).all();
         res.json(rows);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -399,12 +339,6 @@ wss.on('connection', (ws) => {
 wss.on('close', () => clearInterval(interval));
 
 
-/** Add sub-module data to submodules table */
-const insertSubmoduleIntended = db.prepare(`
-    INSERT OR IGNORE INTO node_submodules
-        (node_id, sub_index, personality_id, config_byte0, config_byte1, config_byte2)
-    VALUES (?, ?, ?, ?, ?, ?)
-`);
 
 
 /** Fetch 20 most recent audits joined with their comments */
@@ -543,6 +477,98 @@ function broadcastAuditLog() {
         }
     }
 }
+
+/**
+ * Seed the sub-modules for a given node string and node object.
+ * This function inserts the intended sub-module configuration into the database.
+ * @param {string} nodeString - The friendly text string representing the node.
+ * @param {object} myNode - The node object containing the sub-module information.
+ * @return {void}
+ */
+function seedSubModules(nodeString, myNode) {
+    /** Add sub-module data to submodules table */
+    const insertSubmoduleIntended = db.prepare(`
+        INSERT OR IGNORE INTO node_submodules
+        (node_id, sub_index, personality_id,
+        config_byte0, config_byte1, config_byte2,
+        data_msg_id, data_msg_dlc, save_state)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    
+    for (const [subIdx, sub] of Object.entries(myNode.subModule)) {
+        // console.log("Processing sub-module", subIdx, "\n", JSON.stringify(sub, null, 2));
+
+        /** make sure these fields are numbers */
+        const introMsgId = Number(sub.introMsgId ?? 0);
+        const dataMsgId  = Number(sub.dataMsgId  ?? 0);
+        const dataMsgDlc = Number(sub.dataMsgDlc ?? 0);
+        const saveState  = Number(sub.saveState  ?? 0);
+
+        insertSubmoduleIntended.run(
+            nodeString,
+            Number(subIdx),
+            introMsgId,
+            sub.rawConfig[0],
+            sub.rawConfig[1],
+            sub.rawConfig[2],
+            dataMsgId,
+            dataMsgDlc,
+            saveState
+        );
+    }    
+}
+
+/**
+ * Retrieve the intended sub-module configuration for a given node ID and sub-index.
+ * @param {string} nodeId - The ID of the node.
+ * @param {number} subIdx - The sub-index of the sub-module.
+ * @return {object|null} - The intended sub-module configuration, or null if not found.
+ */
+function getIntendedSubmodule(nodeId, subIdx) {
+    return db.prepare(`
+        SELECT personality_id,
+               config_byte0, config_byte1, config_byte2,
+               data_msg_id, data_msg_dlc, save_state
+        FROM node_submodules
+        WHERE node_id = ? AND sub_index = ?
+    `).get(nodeId, subIdx);
+}
+
+
+function compareSubmodule(reported, intended) {
+    if (!intended) {
+        return {
+            isInSync: false,
+            personalityMatch: false,
+            dataMsgIdMatch: false,
+            dataMsgDlcMatch: false,
+            saveStateMatch: false,
+            byteMatches: [false, false, false]
+        };
+    }
+
+    const byteMatches = [
+        reported.rawConfig[0] === intended.config_byte0,
+        reported.rawConfig[1] === intended.config_byte1,
+        reported.rawConfig[2] === intended.config_byte2
+    ];
+
+    return {
+        personalityMatch: reported.introMsgId === intended.personality_id,
+        dataMsgIdMatch:   reported.dataMsgId   === intended.data_msg_id,
+        dataMsgDlcMatch:  reported.dataMsgDlc  === intended.data_msg_dlc,
+        saveStateMatch:   reported.saveState   === intended.save_state,
+        byteMatches,
+        isInSync:
+            reported.introMsgId === intended.personality_id &&
+            reported.dataMsgId   === intended.data_msg_id &&
+            reported.dataMsgDlc  === intended.data_msg_dlc &&
+            reported.saveState   === intended.save_state &&
+            byteMatches.every(x => x === true)
+    };
+}
+
+
 
 /**
  * Updates current inventory and archives a snapshot if data has changed.
@@ -869,6 +895,9 @@ function loadMetadata() {
         metadataCache.personalityFields.get(row.personality_id)[row.field_index] = row.field_id;
     }
 
+    const personalitySize = Object.keys(metadataCache.personalityFields).length;
+    console.log("Personality fields:", personalitySize);
+
     // Load personality names
     const personalities = db.prepare(`SELECT personality_id, name FROM personalities`).all();
     metadataCache.personalityNames = new Map();
@@ -967,7 +996,7 @@ function updateNodeDatabase(msg) {
         myNode.configCrc       = incomingCrc;
 
         /** Update the 'humand readable' node name */
-        myNode.nodeTypeName    = metadataCache.nodeNames.get(messageId) || "Unknown Node Type";
+        myNode.nodeTypeName    = nodeName;
 
         /** If this is the first time we've seen this nodeID record first-seen time */
         if (!myNode.firstSeen) myNode.firstSeen = Date.now();
@@ -978,6 +1007,14 @@ function updateNodeDatabase(msg) {
 
             /** Sync the in-memory state to SQLite */
             syncNodeToDatabase(nodeString, myNode);
+
+            /** Seed the submodules table for this node, only if data does not already exist */
+            seedSubModules(nodeString, myNode);
+
+            /** Set a flag for the entire node being "in sync" if all sub-modules are in sync */
+            myNode.isInSync = Object.values(myNode.subModule)
+                .every(sub => sub.isInSync === true);
+
             // console.log("Node:", nodeString, "interview complete, not sending ack");
         } else {
             console.log("Node:", nodeString, "Sub-module count:", myNode.subModCnt, "CRC: ", myNode.configCrc);
@@ -998,9 +1035,9 @@ function updateNodeDatabase(msg) {
         /** Ensure the parent node exists before trying to add sub-modules */
         if (!canDatabase[nodeString]) return;
 
-        let subModIdx   = msg.data[SUBMODID_OFFSET];
-        const workingIdx = (subModIdx & SUBMOD_PARTB_MASK); /* Get sub-module index */
-        const messageStr = "0x" + messageId.toString(16).toUpperCase();
+        let subModIdx         = msg.data[SUBMODID_OFFSET];
+        const workingIdx      = (subModIdx & SUBMOD_PARTB_MASK); /* Get sub-module index */
+        const messageStr      = "0x" + messageId.toString(16).toUpperCase();
         const personalityName = metadataCache.personalityNames.get(messageId) || "Unknown Personality";
 
         try {/** Exit if sub-module interview is already complete */
@@ -1027,7 +1064,7 @@ function updateNodeDatabase(msg) {
              canDatabase[nodeString].subModule[subModIdx] = {
                 rawConfig: new Array(SUBMOD_RAW_CFG_BYTES).fill(0) /* Pre-allocate for 3 config bytes */
             };
-            canDatabase[nodeString].subModule[subModIdx].decoded = null; /* Initialize to null */
+            canDatabase[nodeString].subModule[subModIdx].fieldsDecoded = null; /* Initialize to null */
         }
         
         /** create reference to the sub-module */
@@ -1036,21 +1073,18 @@ function updateNodeDatabase(msg) {
         /** update sub-module specific properties */
         targetSub.subModIdx          = subModIdx;
         targetSub.lastSeen           = Date.now();
+        targetSub.personalityStr     = messageStr; /* save the formatted intro message ID */
         targetSub.introMsgId         = messageId; /* personality */
         targetSub.introMsgDlc        = INTRO_MSG_DLC;
 
         /** get the personality name from the metadata cache */
         targetSub.personalityName    = metadataCache.personalityNames.get(messageId) || "Unknown Personality";
 
-
         if (!subModPartB) {          /* First introduction phase */
             /** Store raw configuration bytes */
-            targetSub.rawConfig[0]   = msg.data[SUBMOD_RAW0_OFFSET];
-            targetSub.rawConfig[1]   = msg.data[SUBMOD_RAW1_OFFSET];
-            targetSub.rawConfig[2]   = msg.data[SUBMOD_RAW2_OFFSET];
-
-            /** Decode using cached metadata */
-            targetSub.decoded        = decodeSubmodule(messageId, targetSub.rawConfig);
+            targetSub.rawConfig[0]   = msg.data[SUBMOD_RAW0_OFFSET]; /* raw config byte 0 */
+            targetSub.rawConfig[1]   = msg.data[SUBMOD_RAW1_OFFSET]; /* raw config byte 1 */
+            targetSub.rawConfig[2]   = msg.data[SUBMOD_RAW2_OFFSET]; /* raw config byte 2 */
 
             /** Set flag indicating part A of the interview is complete */
             targetSub.partAComplete  = true;
@@ -1064,7 +1098,9 @@ function updateNodeDatabase(msg) {
             
             targetSub.dataMsgDlc     = dlc;
             targetSub.saveState      = saveState;            
+            /** Set flag indicating part B of the interview is complete */
             targetSub.partBComplete  = true;
+
             // console.log("Node", nodeString, "sub-module", subModIdx, "part B complete");
         }
         
@@ -1072,9 +1108,28 @@ function updateNodeDatabase(msg) {
             /* store index last sub-module introduced for this node */
             canDatabase[nodeString].lastSubModIdx = subModIdx; 
 
+            // console.log("Node", nodeString, "sub-module", subModIdx, "\n", JSON.stringify(targetSub, null, 2));
             /* Sync node to database */
             syncNodeToDatabase(nodeString, canDatabase[nodeString]);
 
+            /** Decode using cached metadata */
+            targetSub.fieldsDecoded  = decodeSubmodule(messageId, targetSub.rawConfig);
+
+            /** Load intended state from DB */
+            const intended = getIntendedSubmodule(nodeString, subModIdx);
+
+            /** Compare reported vs intended */
+            const cmp = compareSubmodule(targetSub, intended);
+
+            /** Store comparison results in memory */
+            targetSub.intended = intended;
+            targetSub.isInSync = cmp.isInSync;
+            targetSub.byteMatches = cmp.byteMatches;
+            targetSub.personalityMatch = cmp.personalityMatch;
+            targetSub.dataMsgIdMatch = cmp.dataMsgIdMatch;
+            targetSub.dataMsgDlcMatch = cmp.dataMsgDlcMatch;
+            targetSub.saveStateMatch = cmp.saveStateMatch;
+            
             // console.log("Node", nodeString, "sub-module", subModIdx, "interview complete");
         } 
         sendAckMsg(msg); /**< Acknowledge the sub-module intro message */
