@@ -1,6 +1,6 @@
 # Database docs (from Copilot)
 
-You only need to seed **one more metadata table**: `field_options`. Everything else should remain empty until real CAN nodes report themselves. Below is a clean example of how to seed `field_options`, followed by a complete, human‑readable reference guide to *all* tables in your schema so you can document the system properly.
+Below is a clean example of how to seed `field_options`, followed by a complete, human‑readable reference guide to *all* tables in your schema so you can document the system properly.
 
 ---
 
@@ -48,7 +48,6 @@ You can add more later as you define additional fields.
 
 ## 📘 Complete reference: all tables in your system
 
-This is the documentation you asked for — a clear, durable summary of every table, what it stores, and whether it should be seeded manually.
 
 ---
 
