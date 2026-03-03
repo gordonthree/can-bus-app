@@ -778,34 +778,91 @@ function renderNodeDatabase(nodes) {
                 sRow2.append(rawCfgLabel);
 
                 console.log(`subMod.introMsgId: ${subMod.introMsgId}`);
-                /** look up labels based on introID */
-                const rawLabels = personalities[subMod.introMsgId].labels || ["Raw byte 0", "Raw byte 1", "Raw byte 2"];
+                
+                // --- Metadata-driven field lookup ---
+                const pf = window.meta.personality_fields
+                    .filter(p => p.personality_id === subMod.introMsgId)
+                    .sort((a, b) => a.field_order - b.field_order);
 
-                /** build an input box for each of the config bytes */
+                // Extract labels, input types, and field IDs
+                const labels = pf.map(p => {
+                    const field = window.meta.fields.find(f => f.field_id === p.field_id);
+                    return field ? field.label : `Raw byte ${p.field_order}`;
+                });
+
+                const inputTypes = pf.map(p => p.input_type);
+                const fieldIds = pf.map(p => p.field_id);
+
+                // Fallback if personality defines fewer than 3 fields
+                while (labels.length < SUB_CONFIG_BYTES) labels.push(`Raw byte ${labels.length}`);
+                while (inputTypes.length < SUB_CONFIG_BYTES) inputTypes.push(1);   // numeric fallback
+                while (fieldIds.length < SUB_CONFIG_BYTES) fieldIds.push(null);
+
+                // --- Build the three config inputs ---
                 for (let i = 0; i < SUB_CONFIG_BYTES; i++) {
-                    /** Create a label we can access later */
+                    const fieldLabel = labels[i];
+                    const inputType = inputTypes[i];
+                    const fieldId = fieldIds[i];
+                    const currentValue = subMod.rawConfig ? subMod.rawConfig[i] : 0;
+
+                    // Label span (same DOM structure as before)
                     const bLabel = document.createElement('span');
-                    bLabel.className = 'label-text';
-                    bLabel.classList.add('label-text-inside');
-                    bLabel.innerText = `${rawLabels[i]}:`; /* assign label programmatically */
+                    bLabel.className = 'label-text label-text-inside';
+                    bLabel.innerText = `${fieldLabel}:`;
                     bLabel.id = `sub-${nodeId}-${idxStr}-label${i}`;
                     sRow2.append(bLabel);
 
-                    /** Create input box for numeric data */
-                    const bIn = document.createElement('input');
-                    bIn.type = 'text';
-                    bIn.inputMode = 'numeric'; /* Force numeric input */
-                    bIn.className = 'editor-input';
-                    bIn.classList.add('small-input');
-                    bIn.min = 0; bIn.max = 255; /* limit input to single byte values */
-                    bIn.id = `sub-${nodeId}-${idxStr}-raw${i}`;
-                    bIn.value = subMod.rawConfig ? subMod.rawConfig[i] : 0;
+                    // Input element
+                    let bIn;
+
+                    if (inputType === 1) {
+                        // Numeric input
+                        bIn = document.createElement('input');
+                        bIn.type = 'text';
+                        bIn.inputMode = 'numeric';
+                        bIn.className = 'editor-input small-input';
+                        bIn.min = 0;
+                        bIn.max = 255;
+                        bIn.value = currentValue;
+
+                    } else if (inputType === 2) {
+                        // Dropdown from metadata
+                        bIn = document.createElement('select');
+                        bIn.className = 'editor-input small-input';
+
+                        const options = window.meta.field_options.filter(o => o.field_id === fieldId);
+
+                        options.forEach(o => {
+                            const opt = document.createElement('option');
+                            opt.value = o.value;
+                            opt.textContent = o.label;
+                            if (o.value === currentValue) opt.selected = true;
+                            bIn.appendChild(opt);
+                        });
+
+                    } else {
+                        // Read-only fallback
+                        bIn = document.createElement('input');
+                        bIn.type = 'text';
+                        bIn.className = 'editor-input small-input';
+                        bIn.value = currentValue;
+                        bIn.readOnly = true;
+                    }
+
+                    // Mismatch highlighting
                     if (!subMod.byteMatches[i]) {
                         bIn.classList.add("mismatch");
                     }
 
+                    // Change handler
+                    bIn.addEventListener('change', (e) => {
+                        handleSubModChange(nodeId, idxStr, i, e.target.value);
+                    });
+
+                    bIn.id = `sub-${nodeId}-${idxStr}-raw${i}`;
                     sRow2.append(bIn);
                 }
+
 
 
                 // const subStateBadge            = document.createElement("span");
