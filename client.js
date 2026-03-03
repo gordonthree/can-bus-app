@@ -442,20 +442,28 @@ function renderAuditLog(logs) {
  * Updates the labels for the configuration bytes based on the selected personality ID.
  */
 function updateConfigLabels(nodeId, subIdx, personalityId) {
-    /** look up label text based on introID */
-    const labels = personalities[personalityId].labels || ["Raw byte 0", "Raw byte 1", "Raw byte 2"];
-    for (let i = 0; i<SUB_CONFIG_BYTES; i++) {
-        /** loop through config bytes, assign labels if possible */
+    if (!window.meta) return;
+
+    // 1. Get all field mappings for this personality
+    const pf = window.meta.personality_fields
+        .filter(p => p.personality_id === personalityId)
+        .sort((a, b) => a.field_order - b.field_order);
+
+    // 2. Convert to label strings
+    const labels = pf.map(p => {
+        const field = window.meta.fields.find(f => f.field_id === p.field_id);
+        return field ? field.label : `Raw byte ${p.field_order}`;
+    });
+
+    // 3. Apply labels to the DOM
+    for (let i = 0; i < SUB_CONFIG_BYTES; i++) {
         const labelContainer = document.getElementById(`sub-${nodeId}-${subIdx}-label${i}`);
         if (labelContainer) {
-            labelContainer.innerText = labels[i];
+            labelContainer.innerText = labels[i] || `Raw byte ${i}`;
         }
     }
-    // const labelContainer = document.getElementById(`labels-${nodeId}-${subIdx}`);
-    // if (labelContainer) {
-        // labelContainer.innerHTML = labels.map(l => `<span class="config-label">${l}</span>`).join('');
-    // }
 }
+
 
 /**
  * Triggers a full node re-interview.
