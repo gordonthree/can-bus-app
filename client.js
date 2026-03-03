@@ -536,21 +536,6 @@ function renderNodeDatabase(nodes) {
         <div class="header-cell">Configuration</div>
     `;
 
-    // /** Header row: three columns */
-    // const commandHeader = document.createElement('div');
-    // commandHeader.className = 'header-cell';
-    // commandHeader.innerText = 'Command';
-
-    // const hardwareIdHeader = document.createElement('div');
-    // hardwareIdHeader.className = 'header-cell';
-    // hardwareIdHeader.innerText = 'Hardware ID';
-
-    // const configHeader = document.createElement('div');
-    // configHeader.className = 'header-cell';
-    // configHeader.innerText = 'Configuration';
-
-    // container.append(commandHeader, hardwareIdHeader, configHeader);
-
     for (const [nodeId, nodeData] of Object.entries(nodes)) {
         const isExpanded = expandedNodes.has(nodeId);
         
