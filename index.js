@@ -398,94 +398,6 @@ wss.on('connection', (ws) => {
 
 wss.on('close', () => clearInterval(interval));
 
-/** * Database setup
- * Initialize SQLite tables. 
- * 'better-sqlite3' executes these synchronously on startup.
- */
-db.exec(`
-    CREATE TABLE IF NOT EXISTS node_inventory (
-        node_id TEXT PRIMARY KEY,
-        node_type_msg INTEGER,
-        sub_mod_cnt INTEGER,
-        config_crc INTEGER,
-        first_seen INTEGER,
-        last_seen INTEGER,
-        is_active INTEGER DEFAULT 1,
-        full_data TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS audit_log (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        timestamp INTEGER DEFAULT (strftime('%s', 'now') * 1000),
-        node_id TEXT,
-        sub_idx INTEGER,
-        field TEXT,
-        old_value TEXT,
-        new_value TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS node_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            node_id TEXT,
-            node_type_msg INTEGER,
-            sub_mod_cnt INTEGER,
-            config_crc INTEGER,
-            recorded_at INTEGER, /**< Timestamp in ms (Date.now()) */
-            full_data TEXT       /**< Snapshot of all sub-modules at this time */
-        );
-
-    CREATE TABLE IF NOT EXISTS config_comments (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        audit_id INTEGER UNIQUE,
-        comment_text TEXT,
-        updated_at INTEGER,
-        FOREIGN KEY(audit_id) REFERENCES audit_log(id)
-    );
-
-    CREATE TABLE IF NOT EXISTS message_definitions (
-        id_dec INTEGER PRIMARY KEY,
-        id_hex TEXT,
-        name TEXT,
-        dlc INTEGER,
-        category TEXT,
-        description TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS node_submodules (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        node_id TEXT NOT NULL,
-        sub_index INTEGER NOT NULL,
-        personality_id INTEGER NOT NULL,
-        config_byte0 INTEGER,
-        config_byte1 INTEGER,
-        config_byte2 INTEGER,
-        data_msg_id INTEGER,
-        data_msg_dlc INTEGER,
-        save_state INTEGER,
-        updated_at INTEGER DEFAULT (strftime('%s','now') * 1000),
-        UNIQUE (node_id, sub_index),
-        FOREIGN KEY (node_id) REFERENCES node_inventory(node_id)
-    );
-
-    CREATE TABLE IF NOT EXISTS personalities (
-        personality_id INTEGER PRIMARY KEY,
-        name TEXT NOT NULL,
-        cfg_msg_id INTEGER NOT NULL,
-        cfg_msg_dlc INTEGER NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS personality_fields (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        personality_id INTEGER NOT NULL,
-        field_index INTEGER NOT NULL,
-        label TEXT NOT NULL,
-        input_type INTEGER NOT NULL,
-        FOREIGN KEY (personality_id) REFERENCES personalities(personality_id)
-    );
-
-
-
-`);
 
 /** Add sub-module data to submodules table */
 const insertSubmoduleIntended = db.prepare(`
@@ -666,11 +578,6 @@ function syncNodeToDatabase(nodeId, nodeData) {
         JSON.stringify(nodeData.subModule)
     );
 
-    // NEW: Initialize intended config for each sub-module 
-    for (let i = 0; i < nodeData.subModCnt; i++) { 
-        const sub = nodeData.subModule[i]; 
-        // insertSubmoduleIntended.run( nodeId, i, sub.introMsgId , sub.rawConfig[0], sub.rawConfig[1], sub.rawConfig[2] ); 
-    }
 }
 
 /**
@@ -922,6 +829,87 @@ function unpackByteSeven(byteValue) {
     return { dlc, saveState };
 }
 
+/* === Metadata Cache (loaded once at startup) === */
+
+const metadataCache = {
+    fields: new Map(),
+    fieldOptions: new Map(),
+    personalityFields: new Map(),
+    personalityNames: new Map(),
+    nodeNames: new Map()
+};
+
+function loadMetadata() {
+    // Load fields
+    const fields = db.prepare(`SELECT * FROM fields`).all();
+    for (const f of fields) {
+        metadataCache.fields.set(f.field_id, f);
+    }
+
+    // Load field options
+    const options = db.prepare(`SELECT * FROM field_options ORDER BY option_value`).all();
+    for (const opt of options) {
+        if (!metadataCache.fieldOptions.has(opt.field_id)) {
+            metadataCache.fieldOptions.set(opt.field_id, []);
+        }
+        metadataCache.fieldOptions.get(opt.field_id).push(opt);
+    }
+
+    // Load personality_fields
+    const pf = db.prepare(`
+        SELECT personality_id, field_index, field_id
+        FROM personality_fields
+        ORDER BY personality_id, field_index
+    `).all();
+
+    for (const row of pf) {
+        if (!metadataCache.personalityFields.has(row.personality_id)) {
+            metadataCache.personalityFields.set(row.personality_id, []);
+        }
+        metadataCache.personalityFields.get(row.personality_id)[row.field_index] = row.field_id;
+    }
+
+    // Load personality names
+    const personalities = db.prepare(`SELECT personality_id, name FROM personalities`).all();
+    metadataCache.personalityNames = new Map();
+    for (const p of personalities) {
+        metadataCache.personalityNames.set(p.personality_id, p.name);
+    }
+
+    // Load node type names
+    const nodeTypes = db.prepare(`SELECT node_type_id, name FROM node_types`).all();
+    for (const nt of nodeTypes) {
+        metadataCache.nodeNames.set(nt.node_type_id, nt.name);
+    }
+
+
+    console.log("Metadata cache loaded.");
+}
+
+/** Load metadata into ram */
+loadMetadata();
+
+function decodeSubmodule(personalityId, rawBytes) {
+    const fieldIds = metadataCache.personalityFields.get(personalityId);
+    if (!fieldIds) return null;  // fallback safety
+
+    return fieldIds.map((fieldId, index) => {
+        const fieldDef = metadataCache.fields.get(fieldId);
+        const options = metadataCache.fieldOptions.get(fieldId) || null;
+
+        return {
+            fieldId,
+            fieldName: fieldDef.name,
+            inputType: fieldDef.input_type,
+            description: fieldDef.description,
+            value: rawBytes[index],
+            options
+        };
+    });
+}
+
+
+
 /**
  * Store and organize network modules by Node Type (identifer 0x780-0x7FF)
  * Keep track of the last seen time for each node, as well as associated
@@ -936,6 +924,7 @@ function updateNodeDatabase(msg) {
     const messageId  = msg.id;
     const nodeId     = getNodeId(msg);
     const nodeString = toHexString(nodeId);
+    const nodeName   = metadataCache.nodeNames.get(messageId);
     // console.log("Received message from node: ", nodeString, "0x" + messageId.toString(16).toUpperCase());
 
     if (messageId >= INTRO_MSG_BEGIN && messageId <= INTRO_MSG_END) {
@@ -944,7 +933,7 @@ function updateNodeDatabase(msg) {
         const isKnownNode = nodeString in canDatabase;
 
         if (!isKnownNode) {
-            console.log("Creating new record for node:", nodeString);
+            console.log("Creating new record for node", nodeString, "type:", nodeName);
             /** create new node in the in-memory database */
             canDatabase[nodeString] = { 
                                         subModule:     {}, /* empty sub-module array */
@@ -976,6 +965,9 @@ function updateNodeDatabase(msg) {
         myNode.nodeTypeDlc     = INTRO_MSG_DLC;
         myNode.subModCnt       = msg.data[SUBMODCNT_OFFSET];
         myNode.configCrc       = incomingCrc;
+
+        /** Update the 'humand readable' node name */
+        myNode.nodeTypeName    = metadataCache.nodeNames.get(messageId) || "Unknown Node Type";
 
         /** If this is the first time we've seen this nodeID record first-seen time */
         if (!myNode.firstSeen) myNode.firstSeen = Date.now();
@@ -1009,13 +1001,14 @@ function updateNodeDatabase(msg) {
         let subModIdx   = msg.data[SUBMODID_OFFSET];
         const workingIdx = (subModIdx & SUBMOD_PARTB_MASK); /* Get sub-module index */
         const messageStr = "0x" + messageId.toString(16).toUpperCase();
+        const personalityName = metadataCache.personalityNames.get(messageId) || "Unknown Personality";
 
         try {/** Exit if sub-module interview is already complete */
             if (canDatabase[nodeString].subModule[workingIdx].partAComplete && canDatabase[nodeString].subModule[workingIdx].partBComplete) {
                 console.log("Node", nodeString, "sub-module already interviewed:", workingIdx);
                 return;
             }} catch (error) {
-                console.log("Node", nodeString, "interviewing new sub-module:", workingIdx, "module type:", messageStr);
+                console.log("Node", nodeString, "interviewing new sub-module:", workingIdx, "module type:", messageStr, personalityName);
             }
 
         let subModPartB = false; /* Two-part introduction process */
@@ -1029,26 +1022,38 @@ function updateNodeDatabase(msg) {
             return;
         }
 
-        /* Initialize sub-module entry and rawConfig array if missing */
+        /* Initialize sub-module entry, create rawConfig array and decoded object if missing */
         if (!canDatabase[nodeString].subModule[subModIdx]) {
              canDatabase[nodeString].subModule[subModIdx] = {
                 rawConfig: new Array(SUBMOD_RAW_CFG_BYTES).fill(0) /* Pre-allocate for 3 config bytes */
             };
+            canDatabase[nodeString].subModule[subModIdx].decoded = null; /* Initialize to null */
         }
         
+        /** create reference to the sub-module */
         const targetSub = canDatabase[nodeString].subModule[subModIdx];
-        
+
+        /** update sub-module specific properties */
         targetSub.subModIdx          = subModIdx;
         targetSub.lastSeen           = Date.now();
-        targetSub.introMsgId         = messageId;
+        targetSub.introMsgId         = messageId; /* personality */
         targetSub.introMsgDlc        = INTRO_MSG_DLC;
 
+        /** get the personality name from the metadata cache */
+        targetSub.personalityName    = metadataCache.personalityNames.get(messageId) || "Unknown Personality";
+
+
         if (!subModPartB) {          /* First introduction phase */
+            /** Store raw configuration bytes */
             targetSub.rawConfig[0]   = msg.data[SUBMOD_RAW0_OFFSET];
             targetSub.rawConfig[1]   = msg.data[SUBMOD_RAW1_OFFSET];
             targetSub.rawConfig[2]   = msg.data[SUBMOD_RAW2_OFFSET];
+
+            /** Decode using cached metadata */
+            targetSub.decoded        = decodeSubmodule(messageId, targetSub.rawConfig);
+
+            /** Set flag indicating part A of the interview is complete */
             targetSub.partAComplete  = true;
-            // console.log("Node", nodeString, "sub-module", subModIdx, "part A complete");
         } else {                     /* Second introduction phase */
             /* Bitwise assembly for 16-bit Big Endian Data Message ID */
             targetSub.dataMsgId      = (msg.data[SUBMOD_DATAMSGID_MSB_OFFSET] << SHIFT_BYTE) | 
