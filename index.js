@@ -81,16 +81,16 @@ const SUBMODCNT_OFFSET = 4;
 /** Offset of node configuration CRC in intro messages */
 const CONFIGCRC_OFFSET = 5;
 
-/** Beginning of module (node) intro messages */
+/** Beginning of module (node) intro messages 0x780 */
 const INTRO_MSG_BEGIN = 0x780;
 
-/** End of module (node) intro messages */
+/** End of module (node) intro messages 0x7FF */
 const INTRO_MSG_END = 0x7FF;
 
-/** Beginning of sub-module intro messages */
+/** Beginning of sub-module intro messages 0x700 */
 const SUBMOD_INTRO_BEGIN = 0x700;
 
-/** End of sub-module intro messages */
+/** End of sub-module intro messages 0x77F */
 const SUBMOD_INTRO_END = 0x77F;
 
 /** Offset of sub-module ID in intro messages */
@@ -840,7 +840,7 @@ function handlePeroidicMessages() {
 
     if (Date.now() - lastTsMsg > sendTsInterval) {
         writeCanMessageBE(CAN_MSG.DATA_EPOCH_ID, getTimestampPayload());
-        // saveDatabaseToFile(); /* write database to disk */
+        saveDatabaseToFile(); /* write database to disk */
         lastTsMsg = Date.now();
     }
 }
@@ -967,6 +967,60 @@ function decodeSubmodule(personalityId, rawBytes) {
     });
 }
 
+function detectUnconfiguredSubmodules(nodeString, myNode, db) {
+    // Query intended submodules from DB
+    const intendedRows = db.prepare(`
+        SELECT sub_index FROM node_submodules
+        WHERE node_id = ?
+    `).all(nodeString);
+
+    const intendedIndices = new Set(intendedRows.map(r => r.sub_index));
+
+    // For each submodule the node claims to have
+    for (let i = 0; i < myNode.subModCnt; i++) {
+        const existsOnBus = !!myNode.subModule[i];
+        const existsInDB = intendedIndices.has(i);
+
+        // Unconfigured = exists on bus, but no intended row
+        if (existsOnBus && !existsInDB) {
+            myNode.subModule[i].isUnconfigured = true;
+            myNode.subModule[i].isInSync = false;
+        }
+    }
+}
+
+function detectMissingSubmodules(nodeString, myNode) {
+    const reportedCount = myNode.subModCnt;                 // From intro message
+    const busCount = Object.keys(myNode.subModule).length;  // From interview
+
+    // For each submodule index the node claims to have
+    for (let i = 0; i < reportedCount; i++) {
+        const existsOnBus = !!myNode.subModule[i];
+
+        if (!existsOnBus) {
+            // HARD MISSING: Node claims it exists, but bus never revealed it
+            myNode.subModule[i] = {
+                rawConfig: [0,0,0],
+                subModIdx: i,
+                isMissingHard: true,
+                isMissingSoft: false,
+                isUnconfigured: false,
+                isInSync: false
+            };
+        } else {
+            // SOFT MISSING: Submodule existed before, but didn't respond this cycle
+            // Only mark soft-missing if this submodule was seen in a previous cycle
+            const sub = myNode.subModule[i];
+
+            if (sub.lastSeen && (Date.now() - sub.lastSeen) > 0) {
+                sub.isMissingHard = false;
+                sub.isMissingSoft = true;
+                sub.isInSync = false;
+            }
+        }
+    }
+}
+
 
 
 /**
@@ -996,11 +1050,19 @@ function updateNodeDatabase(msg) {
             /** create new node in the in-memory database */
             canDatabase[nodeString] = { 
                                         subModule:     {}, /* empty sub-module array */
-                                        lastSubModIdx: 0   /* start with index 0 */
+                                        lastSubModIdx: 0,   /* start with index 0 */
+                                        subModCountMatch: null
                                       };
         }
         
+        /** create a reference to the node */
         const myNode = canDatabase[nodeString];
+
+        /** Reset missing sub-module flags */
+        for (const sub of Object.values(myNode.subModule)) {
+            sub.isMissingHard = false;
+            sub.isMissingSoft = false;
+        }
         
         /* Capture the new CRC from the bus */
         const incomingCrc = ((msg.data[CONFIGCRC_OFFSET] << SHIFT_BYTE) |
@@ -1025,25 +1087,62 @@ function updateNodeDatabase(msg) {
         myNode.subModCnt       = msg.data[SUBMODCNT_OFFSET];
         myNode.configCrc       = incomingCrc;
 
-        /** Update the 'humand readable' node name */
+        /** Update the 'human readable' node name */
         myNode.nodeTypeName    = nodeName;
 
         /** If this is the first time we've seen this nodeID record first-seen time */
         if (!myNode.firstSeen) myNode.firstSeen = Date.now();
 
+        /** Check if the number of sub-modules indexed matches the number of advertised submodules */
         if (myNode.lastSubModIdx >= (myNode.subModCnt - 1)) { /* sub module count is 0-indexed */
             /** Mark this interview as complete */
             myNode.introComplete = true;
+
+            /** Check for missing submodules */
+            detectMissingSubmodules(nodeString, myNode, db);
+            
+            /** Check for unconfigured submodules */
+            detectUnconfiguredSubmodules(nodeString, myNode, db);
+
+            /* === Final check to tell if the node and sub-modules are all in sync === */
+
+            /** retrieve the number of submodules read from the bus for this node */
+            const busSubModCount = Object.keys(myNode.subModule).length;
+
+            const intendedRows = db.prepare(`
+                SELECT COUNT(*) AS cnt
+                FROM node_submodules
+                WHERE node_id = ?
+            `).get(nodeString);
+
+            /** read how many submodules are intended, 
+             * how many are programmed into the db for this node */
+            myNode.intendedSubModCnt = intendedRows.cnt;
+
+            /**  compare the reported sub-module count with the intended */
+            const reportedMatchesIntended = (myNode.subModCnt === myNode.intendedSubModCnt);
+
+            /**  compare the bus sub-module count with the intended */
+            const busMatchesIntended = (busSubModCount === myNode.intendedSubModCnt);
+
+            /** if both checks are true, set the flag */
+            myNode.subModCountMatch = reportedMatchesIntended && busMatchesIntended
+
+            /** Check if all submodules are in sync */
+            const subsInSync = Object.values(myNode.subModule)
+            .every(sub => sub.isInSync === true);
+            
+            /** Set a flag for the entire node being "in sync" if all sub-modules are in sync */
+            myNode.isInSync = (
+                myNode.subModCountMatch &&
+                subsInSync
+            );
 
             /** Sync the in-memory state to SQLite */
             syncNodeToDatabase(nodeString, myNode);
 
             /** Seed the submodules table for this node, only if data does not already exist */
             seedSubModules(nodeString, myNode);
-
-            /** Set a flag for the entire node being "in sync" if all sub-modules are in sync */
-            myNode.isInSync = Object.values(myNode.subModule)
-                .every(sub => sub.isInSync === true);
 
             // console.log("Node:", nodeString, "interview complete, not sending ack");
         } else {
@@ -1143,7 +1242,7 @@ function updateNodeDatabase(msg) {
             syncNodeToDatabase(nodeString, canDatabase[nodeString]);
 
             /** Decode using cached metadata */
-            targetSub.fieldsDecoded  = decodeSubmodule(messageId, targetSub.rawConfig);
+            // targetSub.fieldsDecoded  = decodeSubmodule(messageId, targetSub.rawConfig);
 
             /** Load intended state from DB */
             const intended = getIntendedSubmodule(nodeString, subModIdx);
