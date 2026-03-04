@@ -49,9 +49,26 @@ const DLC_MIN = 0;
 /** Sub-module config bytes (24-bits) */
 const SUB_CONFIG_BYTES = 3;
 
+/** Input type 1 is a numeric text box */
+const DEFAULT_INPUT_TYPE = 1;
+
+/** Minimum value for a byte sized number */
+const BYTE_MIN_VALUE = 0;
+
+/** Maximum value for a byte sized number */
+const BYTE_MAX_VALUE = 255;
 
 /** Tracks which Node IDs are currently expanded in the accordion */
 const expandedNodes = new Set();
+
+/** Input type numeric text box 1 */
+const INPUT_TYPE_NUMERIC = 1;
+
+/** Input type select dropdown 2 */
+const INPUT_TYPE_SELECT = 2;
+
+/** Input type read-only text box 0 */
+const INPUT_TYPE_READ_ONLY = 0;
 
 /** Mapping of Sub-Module personalities to their configuration specifics.
  * Derived from the subModule_t C struct.
@@ -380,7 +397,8 @@ function sendConfigUpdate(nodeId, target, subModIdx, payload) {
         payload: payload
     };
 
-    socket.send(JSON.stringify(message));
+    console.log("Sending update:", JSON.stringify(message, null, 2));
+    // socket.send(JSON.stringify(message));
 }
 
 /**
@@ -574,6 +592,434 @@ function saveNodeUpdate(nodeId, subIdx, msgHex, rawArray, dlcVal) {
     }
 }
 
+function renderSubModRow1(nodeId, idxStr, subMod) {
+    /** === ROW 1: Intro and Data Message and Data DLC */
+    const sRow1 = document.createElement('div');
+    sRow1.className = 'input-group input-row1';
+    sRow1.id = `sub-mod-${nodeId}-${idxStr}-row1`;
+
+    /** Intro message label and select box */
+    const introMsgLabel = document.createElement('span');
+    introMsgLabel.className = 'label-text';
+    introMsgLabel.innerText = 'Intro ID:';
+
+    let subIntroMsg = document.createElement('select');
+    subIntroMsg = buildDropdown(allDefinitions, SUBMOD_INTRO_BEGIN, SUBMOD_INTRO_END, subMod.introMsgId);
+    subIntroMsg.className = 'editor-input';
+    subIntroMsg.id = `sub-mod-${nodeId}-${idxStr}-intro-id`;
+    if (!subMod.personalityMatch) {
+        subIntroMsg.classList.add("mismatch");
+    }
+
+    sRow1.append(introMsgLabel, subIntroMsg);
+
+    /** Data message label and select box */
+    const dataMsgLabel = document.createElement('span');
+    dataMsgLabel.className = 'label-text';
+    dataMsgLabel.classList.add('label-text-inside');
+    dataMsgLabel.innerText = 'Data ID:';
+
+    let subDataMsg = document.createElement('select');
+    subDataMsg = buildDropdown(allDefinitions, SUBMOD_DATA_BEGIN, SUBMOD_DATA_END, subMod.dataMsgId);
+    subDataMsg.className = 'editor-input';
+    subDataMsg.id = `sub-mod-${nodeId}-${idxStr}-data-id`;
+    sRow1.append(dataMsgLabel, subDataMsg);
+
+    /** Data Message DLC Label and input box */
+    const dataMsgDlcLabel = document.createElement('span');
+    dataMsgDlcLabel.className = 'label-text';
+    dataMsgDlcLabel.classList.add('label-text-inside');
+    dataMsgDlcLabel.innerText = "Data DLC:";
+    
+    const subDataDlc = document.createElement('input');
+    subDataDlc.className = 'editor-input';
+    subDataDlc.classList.add('small-input');
+    subDataDlc.type = 'text';
+    subDataDlc.inputMode = 'numeric'; /* Force numeric input */
+    subDataDlc.min = DLC_MIN;
+    subDataDlc.max = DLC_MAX;
+    subDataDlc.value = subMod.dataMsgDlc;
+    subDataDlc.id = `sub-mod-${nodeId}-${idxStr}-data-dlc`;
+    if (!subMod.dataMsgDlcMatch) {
+        subDataDlc.classList.add("mismatch");
+    }
+
+    sRow1.append(dataMsgDlcLabel, subDataDlc);
+
+    return sRow1;
+}
+
+function renderSubModRow2(nodeId, idxStr, subMod) {
+    /** === ROW 2: Specific Config */
+    const sRow2 = document.createElement('div');
+    sRow2.className = 'input-group input-row2';
+    sRow2.id = `sub-mod-${nodeId}-${idxStr}-row2`;
+
+    // --- Metadata-driven field lookup ---
+    const pf = window.meta.personality_fields
+        .filter(p => p.personality_id === subMod.introMsgId)
+        .sort((a, b) => a.field_index - b.field_index);
+
+
+    // Extract labels, input types, and field IDs
+    const labels = pf.map(p => {
+        const field = window.meta.fields.find(f => f.field_id === p.field_id);
+        return field ? field.name : `Raw byte ${p.field_index}`;
+    });
+
+    const inputTypes = pf.map(p => {
+        const field = window.meta.fields.find(f => f.field_id === p.field_id);
+        return field ? field.input_type : 0;
+    });
+
+    const fieldIds = pf.map(p => p.field_id);
+
+    /** Config Row Label */
+    const rawCfgLabel         = document.createElement('span');
+    rawCfgLabel.className     = 'label-text';
+    if (labels.length > 0) { 
+        /** Show label if there are fields */
+        rawCfgLabel.innerText = 'Configuration';
+    } else {
+        /** Fallback if there are no field labels */
+        rawCfgLabel.innerText = 'Raw Configuration';
+    }
+    sRow2.append(rawCfgLabel);
+
+    // console.log(`subMod.introMsgId: ${subMod.introMsgId}`);
+
+
+    // Fallback if personality defines fewer than 3 fields
+    while (labels.length < SUB_CONFIG_BYTES) labels.push(`Raw byte ${labels.length}`);
+    while (inputTypes.length < SUB_CONFIG_BYTES) inputTypes.push(DEFAULT_INPUT_TYPE);   // numeric fallback
+    while (fieldIds.length < SUB_CONFIG_BYTES) fieldIds.push(null);
+
+    // --- Loop to build the three config inputs ---
+    for (let i = 0; i < SUB_CONFIG_BYTES; i++) {
+        const fieldLabel = labels[i];
+        const inputType = inputTypes[i];
+        const fieldId = fieldIds[i];
+        const currentValue = subMod.rawConfig ? subMod.rawConfig[i] : 0; /* Retrieve stored value, default to 0 */
+
+        // Label span (same DOM structure as before)
+        const bLabel = document.createElement('span');
+        bLabel.className = 'label-text label-text-inside';
+        bLabel.innerText = `${fieldLabel}:`;
+        bLabel.id = `sub-${nodeId}-${idxStr}-label${i}`;
+        sRow2.append(bLabel);
+
+        // Input element
+        let bIn;
+
+        if (inputType === INPUT_TYPE_NUMERIC) {
+            // Numeric input
+            bIn = document.createElement('input');
+            bIn.type = 'text';
+            bIn.inputMode = 'numeric';
+            bIn.className = 'editor-input small-input';
+            bIn.min = BYTE_MIN_VALUE;
+            bIn.max = BYTE_MAX_VALUE;
+            bIn.value = currentValue;
+
+        } else if (inputType === INPUT_TYPE_SELECT) {
+            // Dropdown from metadata
+            bIn = document.createElement('select');
+            bIn.className = 'editor-input';
+
+            const options = window.meta.field_options.filter(o => o.field_id === fieldId);
+
+            options.forEach(o => {
+                const opt       = document.createElement('option');
+                opt.value       = o.option_value;
+                opt.textContent = o.option_label;
+
+                if (o.option_value === currentValue) {
+                    opt.selected = true;
+                }
+
+                bIn.appendChild(opt);
+            });
+
+
+        } else {
+            // Read-only fallback
+            bIn = document.createElement('input');
+            bIn.type = 'text';
+            bIn.className = 'editor-input small-input';
+            bIn.value = currentValue;
+            bIn.readOnly = true;
+        }
+
+        // Mismatch highlighting
+        if (!subMod.byteMatches[i]) {
+            bIn.classList.add("mismatch");
+        }
+
+        if (inputType === INPUT_TYPE_SELECT || inputType === INPUT_TYPE_NUMERIC) {
+            /** Add change handler only if input is editable */
+            bIn.id = `sub-${nodeId}-${idxStr}-raw${i}`;
+            bIn.addEventListener('change', (e) => {
+                handleSubModChange(nodeId, idxStr, i, e.target.value);
+            });
+        }
+
+        sRow2.append(bIn);
+    }
+
+    /** Label for a Save State checkbox */
+    const subSaveStateLabel        = document.createElement('span');
+    subSaveStateLabel.className    = 'label-text';
+    subSaveStateLabel.classList.add('label-text-inside');
+    subSaveStateLabel.innerText    = subMod.saveStateMatch ? "Save State:" : "⚠ Save State:";
+
+
+    /** Save State checkbox */
+    const saveStateInput           = document.createElement('input');
+    saveStateInput.className       = 'editor-input';
+    saveStateInput.classList.add('small-input');
+    saveStateInput.type            = 'checkbox';
+    saveStateInput.checked         = subMod.saveState;
+    saveStateInput.id              = `sub-mod-${nodeId}-${idxStr}-save-state`;
+    if (!subMod.saveStateMatch) { 
+        saveStateInput.classList.add("mismatch"); 
+    }
+
+    /** Save state change handler */
+    saveStateInput.addEventListener('change', (e) => {
+        handleSubModChange(nodeId, idxStr, i, e.target.value);
+    });
+
+    /** Add label and checkbox to Row2 */
+    sRow2.append(subSaveStateLabel, saveStateInput);
+
+    return sRow2;
+}
+
+function renderSubmoduleCard(nodeId, idxStr, subMod) {
+    const subModIdx = idxStr;
+
+    /* Remember grid is only three columns wide */
+
+    /* === First column: Sub-module Command Cell, buttons would go here */
+    const subCmdCell = document.createElement('div');
+    subCmdCell.className = 'data-cell';
+    subCmdCell.classList.add('sub-cmd');
+
+    /** command cell text */
+    const sCmdText = document.createElement('span');
+    sCmdText.innerText = '↳';
+    subCmdCell.appendChild(sCmdText);
+
+    /* === Second column: Sub-module ID Cell, warning flags could go here */
+
+    /** Sub-module ID Cell */
+    const subIdCell = document.createElement('div');
+    subIdCell.className = 'data-cell';
+    subIdCell.classList.add('sub-id');
+
+    /** Sub-module ID text */
+    const subIdText = document.createElement('span');
+    subIdText.className = 'hex-id';
+    subIdText.innerText = `submod ${idxStr}`;
+    subIdText.style.paddingLeft = '4px';
+    subIdCell.appendChild(subIdText);
+
+    /* === Third column: data entry rows */
+
+    /** Sub-module Data Cell (Stacked rows) */
+    const subDataCell = document.createElement('div');
+    subDataCell.className = 'data-cell';
+    subDataCell.classList.add('sub-config');
+    subDataCell.id = `submod-${nodeId}-${subModIdx}-personality`;
+
+    /** Create container for the input element rows */
+    const sStack = document.createElement('div');
+    sStack.className = 'config-stack';
+
+    /** call a helper to render row 1 */
+    const sRow1 = renderSubModRow1(nodeId, idxStr, subMod);
+    /** add it to the stack */
+    sStack.appendChild(sRow1);
+
+    /** call a helper to render row 2 */
+    const sRow2 = renderSubModRow2(nodeId, idxStr, subMod);
+    /** add it to the stack */
+    sStack.appendChild(sRow2);
+    
+    /** Add config stack to the sub-module data container */
+    subDataCell.appendChild(sStack);
+
+    /** TODO Assign onchange handlers */
+    // subIntroMsg.onchange = handleSubModChange;
+    // subDataMsg.onchange = handleSubModChange;
+    // subDataDlc.onchange = handleSubModChange;
+    for (let i = 0; i < SUB_CONFIG_BYTES; i++) {
+        `sub-${nodeId}-${idxStr}-raw${i}`.onchange = handleSubModChange;
+    }
+    // rawInputs.forEach(input => input.onchange = handleSubModChange);
+
+    // container.append(subCmdCell, subIdCell, subDataCell);
+    return [subCmdCell, subIdCell, subDataCell];
+}
+
+function renderNodeDataCell(nodeId, nodeData) {
+    const dataCell = document.createElement('div');
+    dataCell.className = 'data-cell';
+    dataCell.classList.add('config-cell');
+
+    /** Single row wrapper for the input elements */
+    const dataWrapper = document.createElement('div');
+    dataWrapper.className = 'input-group parent-node';
+    
+    /** Create label for the Intro Message Dropdown */
+    const typeLabel = document.createElement('span'); 
+    typeLabel.className = 'label-text';
+    typeLabel.innerText = "Intro ID:";
+
+    /** Create the Intro Message Dropdown */
+    let nodeTypeSelect = document.createElement('select');
+    nodeTypeSelect = buildDropdown(allDefinitions, NODE_INTRO_MSG_BEGIN, NODE_INTRO_MSG_END, nodeData.nodeTypeMsg);
+    nodeTypeSelect.className = 'editor-input';
+    nodeTypeSelect.id = `node-type-${nodeId}`;
+    
+    /** Create label for the Sub-Module Count */
+    const subLabel = document.createElement('span');
+    subLabel.className = 'label-text';
+    subLabel.classList.add('label-text-inside');
+    subLabel.innerText = 'Sub Mod Count:';
+
+    /** Create the Sub-Module Count Input */
+    const subModCntInput = document.createElement('input');
+    subModCntInput.className   = 'editor-input';
+    subModCntInput.classList.add('small-input');
+    subModCntInput.value       = nodeData.subModCnt;
+    subModCntInput.type        = 'text';
+    subModCntInput.inputmode   = 'numeric'; /* Only allow numeric input */
+    subModCntInput.min         = SUBMOD_CNT_MIN;
+    subModCntInput.max         = SUBMOD_CNT_MAX;
+    subModCntInput.id          = `sub-mod-cnt-${nodeId}`;
+
+    /** Create label for the DLC input */
+    const dlcLabel = document.createElement('span');
+    dlcLabel.className = 'label-text';
+    dlcLabel.classList.add('label-text-inside');
+    dlcLabel.innerText = "DLC:";
+    
+    /** Create the DLC Input */
+    const dlcInput = document.createElement('input');
+    dlcInput.className = 'editor-input';
+    dlcInput.classList.add('small-input');
+    dlcInput.type = 'text';
+    dlcInput.inputmode = 'numeric'; /* Only allow numeric input */
+    dlcInput.min = DLC_MIN;
+    dlcInput.max = DLC_MAX;
+    dlcInput.value = nodeData.nodeTypeDlc;
+    dlcInput.id = `node-type-dlc-${nodeId}`;
+
+    /** Append the labels and input elements to the wrapper */
+    dataWrapper.append(typeLabel, nodeTypeSelect, subLabel, subModCntInput, dlcLabel, dlcInput);
+    
+    /** Append the wrapper to the data cell, only one row for the parent node */
+    dataCell.appendChild(dataWrapper);    
+
+    /** Bind PARENT changes to send update */
+    const handleParentChange = () => {
+        const updatedParent = {
+            ...nodeData, // Keep existing fields
+            nodeTypeMsg: parseInt(nodeTypeSelect.value, 10),
+            subModCnt: parseInt(subModCntInput.value, 10),
+            nodeTypeDlc: parseInt(dlcInput.value, 10)
+        };
+        sendConfigUpdate(nodeId, 'PARENT', null, updatedParent);
+    };
+
+    nodeTypeSelect.onchange = handleParentChange;
+    subModCntInput.onchange = handleParentChange;
+    dlcInput.onchange = handleParentChange;
+    
+    return dataCell;
+}
+
+function renderNodeIdCell(nodeId, nodeData) {
+    // 2. ID Cell
+    const idCell = document.createElement('div');
+    idCell.className = 'data-cell';
+    idCell.classList.add('id-cell');
+    /** add coloration if node is not in sync */
+    if (!nodeData.isInSync) {
+        idCell.classList.add("mismatch");
+    } else {
+        idCell.classList.add("hex-id");
+    }
+    /** Add a badge to the node id cell to show sync status */
+    const nodeSyncBadge = document.createElement("span");
+    nodeSyncBadge.innerText = nodeData.isInSync ? "✓" : "⚠";
+    nodeSyncBadge.style.marginLeft = "8px";
+    idCell.appendChild(nodeSyncBadge);
+
+
+    const idCellText = document.createElement('span');
+    idCellText.innerText = nodeId.toUpperCase();
+    idCellText.style.paddingLeft = '4px';
+
+    idCell.append(idCellText);    
+
+    return idCell;
+}
+
+function renderNodeCmdButtons(nodeId, isExpanded) {
+    /** Command Buttons Cell */
+    const cmdCell = document.createElement('div');
+    cmdCell.className = 'data-cell';
+    cmdCell.classList.add('command-cell');
+
+    /** button to expand parent node */
+    const buttonExpandNode = document.createElement('button');
+    buttonExpandNode.className = 'command-button';
+    buttonExpandNode.id = `expand-button-${nodeId}`;
+    buttonExpandNode.title = isExpanded ? 'Collapse Node' : 'Expand Node';
+    buttonExpandNode.innerText = isExpanded ? '[-]' : '[+]';
+    buttonExpandNode.onclick = () => toggleNode(nodeId);
+
+    /** button to persist parent node to bus */
+    const buttonPersistNode = document.createElement('button');
+    buttonPersistNode.className = 'command-button';
+    buttonPersistNode.id = `persist-button-${nodeId}`;
+    buttonPersistNode.innerText = '[P]';
+    buttonPersistNode.title = 'Persist Changes';
+    buttonPersistNode.style.marginLeft = '5px';
+    buttonPersistNode.onclick = () => persistNodeToBus(nodeId);
+
+    /** button to (re)interview parent node */
+    const buttonInterviewNode = document.createElement('button');
+    buttonInterviewNode.className = 'command-button';
+    buttonInterviewNode.id = `interview-button-${nodeId}`;
+    buttonInterviewNode.innerText = '[I]';
+    buttonInterviewNode.title = 'Interview Node';
+    buttonInterviewNode.style.marginLeft = '5px';
+    buttonInterviewNode.onclick = () => interviewNode(nodeId);
+
+    /** add buttons to command cell */
+    cmdCell.append(buttonExpandNode, buttonPersistNode, buttonInterviewNode);
+
+    return cmdCell;
+}
+
+function handleSubModChange() {
+    const updatedSubMod = {
+        ...subMod,
+        introMsgId: parseInt(subIntroMsg.value, 10),
+        dataMsgId: parseInt(subDataMsg.value, 10),
+        dataMsgDlc: parseInt(subDataDlc.value, 10),
+        rawConfig: [
+            parseInt(`sub-${nodeId}-${idxStr}-raw0`.value, 10),
+            parseInt(`sub-${nodeId}-${idxStr}-raw1`.value, 10),
+            parseInt(`sub-${nodeId}-${idxStr}-raw2`.value, 10)
+        ]
+    };
+    sendConfigUpdate(nodeId, 'SUBMODULE', idxStr, updatedSubMod);
+};
+
 /**
  * Renders the inline editor for the Node database.
  * @param {Object} nodes - The CAN node database object.
@@ -596,405 +1042,26 @@ function renderNodeDatabase(nodes) {
     for (const [nodeId, nodeData] of Object.entries(nodes)) {
         const isExpanded = expandedNodes.has(nodeId);
         
-        /** Command Buttons Cell */
-        const cmdCell = document.createElement('div');
-        cmdCell.className = 'data-cell';
-        cmdCell.classList.add('command-cell');
+        /* Create three columns for the grid layout */
 
-        /** button to expand parent node */
-        const buttonExpandNode = document.createElement('button');
-        buttonExpandNode.className = 'command-button';
-        buttonExpandNode.id = `expand-button-${nodeId}`;
-        buttonExpandNode.title = isExpanded ? 'Collapse Node' : 'Expand Node';
-        buttonExpandNode.innerText = isExpanded ? '[-]' : '[+]';
-        buttonExpandNode.onclick = () => toggleNode(nodeId);
+        /** 1. Render Command Buttons Cell */
+        const cmdCell  = renderNodeCmdButtons(nodeId, isExpanded);
 
-        /** button to persist parent node to bus */
-        const buttonPersistNode = document.createElement('button');
-        buttonPersistNode.className = 'command-button';
-        buttonPersistNode.id = `persist-button-${nodeId}`;
-        buttonPersistNode.innerText = '[P]';
-        buttonPersistNode.title = 'Persist Changes';
-        buttonPersistNode.style.marginLeft = '5px';
-        buttonPersistNode.onclick = () => persistNodeToBus(nodeId);
+        /** 2. Render Hardware ID Cell */
+        const idCell   = renderNodeIdCell(nodeId, nodeData);
 
-        /** button to (re)interview parent node */
-        const buttonInterviewNode = document.createElement('button');
-        buttonInterviewNode.className = 'command-button';
-        buttonInterviewNode.id = `interview-button-${nodeId}`;
-        buttonInterviewNode.innerText = '[I]';
-        buttonInterviewNode.title = 'Interview Node';
-        buttonInterviewNode.style.marginLeft = '5px';
-        buttonInterviewNode.onclick = () => interviewNode(nodeId);
-
-        /** add buttons to command cell */
-        cmdCell.append(buttonExpandNode, buttonPersistNode, buttonInterviewNode);
-
-        // 2. ID Cell
-        const idCell = document.createElement('div');
-        idCell.className = 'data-cell';
-        idCell.classList.add('id-cell');
-        /** add coloration if node is not in sync */
-        if (!nodeData.isInSync) {
-            idCell.classList.add("mismatch");
-        } else {
-            idCell.classList.add("hex-id");
-        }
-        /** Add a badge to the node id cell to show sync status */
-        const nodeSyncBadge = document.createElement("span");
-        nodeSyncBadge.innerText = nodeData.isInSync ? "✓" : "⚠";
-        nodeSyncBadge.style.marginLeft = "8px";
-        idCell.appendChild(nodeSyncBadge);
-
-
-        const idCellText = document.createElement('span');
-        idCellText.innerText = nodeId.toUpperCase();
-        idCellText.style.paddingLeft = '4px';
-
-        idCell.append(idCellText);
-
-        // 3. Data Cell (Container for config labels and inputs)
-        const dataCell = document.createElement('div');
-        dataCell.className = 'data-cell';
-        dataCell.classList.add('config-cell');
-
-        /** Single row wrapper for the input elements */
-        const dataWrapper = document.createElement('div');
-        dataWrapper.className = 'input-group';
-        
-        /** Create label for the Intro Message Dropdown */
-        const typeLabel = document.createElement('span'); 
-        typeLabel.className = 'label-text';
-        typeLabel.innerText = "Intro ID:";
-
-        /** Create the Intro Message Dropdown */
-        let nodeTypeSelect = document.createElement('select');
-        nodeTypeSelect = buildDropdown(allDefinitions, NODE_INTRO_MSG_BEGIN, NODE_INTRO_MSG_END, nodeData.nodeTypeMsg);
-        nodeTypeSelect.className = 'editor-input';
-        nodeTypeSelect.id = `node-type-${nodeId}`;
-        
-        /** Create label for the Sub-Module Count */
-        const subLabel = document.createElement('span');
-        subLabel.className = 'label-text';
-        subLabel.classList.add('label-text-inside');
-        subLabel.innerText = 'Sub Mod Count:';
-
-        /** Create the Sub-Module Count Input */
-        const subModCntInput = document.createElement('input');
-        subModCntInput.className   = 'editor-input';
-        subModCntInput.classList.add('small-input');
-        subModCntInput.value       = nodeData.subModCnt;
-        subModCntInput.type        = 'text';
-        subModCntInput.inputmode   = 'numeric'; /* Only allow numeric input */
-        subModCntInput.min         = SUBMOD_CNT_MIN;
-        subModCntInput.max         = SUBMOD_CNT_MAX;
-        subModCntInput.id          = `sub-mod-cnt-${nodeId}`;
-
-        /** Create label for the DLC input */
-        const dlcLabel = document.createElement('span');
-        dlcLabel.className = 'label-text';
-        dlcLabel.classList.add('label-text-inside');
-        dlcLabel.innerText = "DLC:";
-        
-        /** Create the DLC Input */
-        const dlcInput = document.createElement('input');
-        dlcInput.className = 'editor-input';
-        dlcInput.classList.add('small-input');
-        dlcInput.type = 'text';
-        dlcInput.inputmode = 'numeric'; /* Only allow numeric input */
-        dlcInput.min = DLC_MIN;
-        dlcInput.max = DLC_MAX;
-        dlcInput.value = nodeData.nodeTypeDlc;
-        dlcInput.id = `node-type-dlc-${nodeId}`;
-
-        /** Append the labels and input elements to the wrapper */
-        dataWrapper.append(typeLabel, nodeTypeSelect, subLabel, subModCntInput, dlcLabel, dlcInput);
-        
-        /** Append the wrapper to the data cell, only one row for the parent node */
-        dataCell.appendChild(dataWrapper);
-
-        /** Bind PARENT changes to send update */
-        const handleParentChange = () => {
-            const updatedParent = {
-                ...nodeData, // Keep existing fields
-                nodeTypeMsg: parseInt(nodeTypeSelect.value, 10),
-                subModCnt: parseInt(subModCntInput.value, 10),
-                nodeTypeDlc: parseInt(dlcInput.value, 10)
-            };
-            sendConfigUpdate(nodeId, 'PARENT', null, updatedParent);
-        };
-
-        nodeTypeSelect.onchange = handleParentChange;
-        subModCntInput.onchange = handleParentChange;
-        dlcInput.onchange = handleParentChange;
+        /** 3. Data Cell (Container for config labels and inputs) */
+        const dataCell = renderNodeDataCell(nodeId, nodeData);
 
         /** Append row to grid */
         container.append(cmdCell, idCell, dataCell); 
-
 
         /** --- SUB-MODULES --- */
         if (isExpanded && nodeData.subModule) {
             /** loop through the sub-module entires and create editor rows */
             for (const [idxStr, subMod] of Object.entries(nodeData.subModule)) {
-                /* Remember grid is only three columns wide now */
-
-
-
-                /* === First column: Sub-module Command Cell */
-                const subCmdCell = document.createElement('div');
-                subCmdCell.className = 'data-cell';
-                subCmdCell.classList.add('sub-cmd');
-
-                const sCmdText = document.createElement('span');
-                sCmdText.innerText = '↳ Sub-module';
-                subCmdCell.appendChild(sCmdText);
-
-                /* === Second column: Sub-module ID Cell */
-
-                /** Sub-module ID Cell */
-                const subIdCell = document.createElement('div');
-                subIdCell.className = 'data-cell';
-                subIdCell.classList.add('sub-id');
-
-                /** Sub-module ID text */
-                const subIdText = document.createElement('span');
-                subIdText.className = 'hex-id';
-                subIdText.innerText = idxStr;
-                subIdText.style.paddingLeft = '4px';
-                subIdCell.appendChild(subIdText);
-
-                /* === Third column: data entry rows */
-
-                /** Sub-module Data Cell (Stacked rows) */
-                const subDataCell = document.createElement('div');
-                subDataCell.className = 'data-cell';
-
-                /** Create container for the input element rows */
-                const sStack = document.createElement('div');
-                sStack.className = 'config-stack';
-
-                /** === ROW 1: Intro and Data Message and Data DLC */
-                const sRow1 = document.createElement('div');
-                sRow1.className = 'input-group';
-
-                /** Intro message label and select box */
-                const introMsgLabel = document.createElement('span');
-                introMsgLabel.className = 'label-text';
-                introMsgLabel.innerText = 'Intro ID:';
-
-                let subIntroMsg = document.createElement('select');
-                subIntroMsg = buildDropdown(allDefinitions, SUBMOD_INTRO_BEGIN, SUBMOD_INTRO_END, subMod.introMsgId);
-                subIntroMsg.className = 'editor-input';
-                subIntroMsg.id = `sub-mod-${nodeId}-${idxStr}-intro-id`;
-                if (!subMod.personalityMatch) {
-                    subIntroMsg.classList.add("mismatch");
-                }
-
-                sRow1.append(introMsgLabel, subIntroMsg);
-
-                /** Data message label and select box */
-                const dataMsgLabel = document.createElement('span');
-                dataMsgLabel.className = 'label-text';
-                dataMsgLabel.classList.add('label-text-inside');
-                dataMsgLabel.innerText = 'Data ID:';
-
-                let subDataMsg = document.createElement('select');
-                subDataMsg = buildDropdown(allDefinitions, SUBMOD_DATA_BEGIN, SUBMOD_DATA_END, subMod.dataMsgId);
-                subDataMsg.className = 'editor-input';
-                subDataMsg.id = `sub-mod-${nodeId}-${idxStr}-data-id`;
-                sRow1.append(dataMsgLabel, subDataMsg);
-
-                /** Data Message DLC Label and input box */
-                const dataMsgDlcLabel = document.createElement('span');
-                dataMsgDlcLabel.className = 'label-text';
-                dataMsgDlcLabel.classList.add('label-text-inside');
-                dataMsgDlcLabel.innerText = "Data DLC:";
-                
-                const subDataDlc = document.createElement('input');
-                subDataDlc.className = 'editor-input';
-                subDataDlc.classList.add('small-input');
-                subDataDlc.type = 'text';
-                subDataDlc.inputMode = 'numeric'; /* Force numeric input */
-                subDataDlc.min = DLC_MIN;
-                subDataDlc.max = DLC_MAX;
-                subDataDlc.value = subMod.dataMsgDlc;
-                subDataDlc.id = `sub-mod-${nodeId}-${idxStr}-data-dlc`;
-                if (!subMod.dataMsgDlcMatch) {
-                    subDataDlc.classList.add("mismatch");
-                }
-
-                sRow1.append(dataMsgDlcLabel, subDataDlc);
-
-                
-                /** === ROW 2: Specific Config */
-                const sRow2 = document.createElement('div');
-                sRow2.className = 'input-group';
-
-                /** Raw Config Label */
-                const rawCfgLabel = document.createElement('span');
-                rawCfgLabel.className = 'label-text';
-                rawCfgLabel.innerText = (personalities.hasOwnProperty(subMod.introMsgId)) ? 'Configuration' : 'Raw Config Bytes:';
-                sRow2.append(rawCfgLabel);
-
-                console.log(`subMod.introMsgId: ${subMod.introMsgId}`);
-                
-                // --- Metadata-driven field lookup ---
-                const pf = window.meta.personality_fields
-                    .filter(p => p.personality_id === subMod.introMsgId)
-                    .sort((a, b) => a.field_index - b.field_index);
-
-                // Extract labels, input types, and field IDs
-                const labels = pf.map(p => {
-                    const field = window.meta.fields.find(f => f.field_id === p.field_id);
-                    return field ? field.name : `Raw byte ${p.field_index}`;
-                });
-
-                const inputTypes = pf.map(p => {
-                    const field = window.meta.fields.find(f => f.field_id === p.field_id);
-                    return field ? field.input_type : 0;
-                });
-
-                const fieldIds = pf.map(p => p.field_id);
-
-                // Fallback if personality defines fewer than 3 fields
-                while (labels.length < SUB_CONFIG_BYTES) labels.push(`Raw byte ${labels.length}`);
-                while (inputTypes.length < SUB_CONFIG_BYTES) inputTypes.push(1);   // numeric fallback
-                while (fieldIds.length < SUB_CONFIG_BYTES) fieldIds.push(null);
-
-                // --- Build the three config inputs ---
-                for (let i = 0; i < SUB_CONFIG_BYTES; i++) {
-                    const fieldLabel = labels[i];
-                    const inputType = inputTypes[i];
-                    const fieldId = fieldIds[i];
-                    const currentValue = subMod.rawConfig ? subMod.rawConfig[i] : 0;
-
-                    // Label span (same DOM structure as before)
-                    const bLabel = document.createElement('span');
-                    bLabel.className = 'label-text label-text-inside';
-                    bLabel.innerText = `${fieldLabel}:`;
-                    bLabel.id = `sub-${nodeId}-${idxStr}-label${i}`;
-                    sRow2.append(bLabel);
-
-                    // Input element
-                    let bIn;
-
-                    if (inputType === 1) {
-                        // Numeric input
-                        bIn = document.createElement('input');
-                        bIn.type = 'text';
-                        bIn.inputMode = 'numeric';
-                        bIn.className = 'editor-input small-input';
-                        bIn.min = 0;
-                        bIn.max = 255;
-                        bIn.value = currentValue;
-
-                    } else if (inputType === 2) {
-                        // Dropdown from metadata
-                        bIn = document.createElement('select');
-                        bIn.className = 'editor-input';
-
-                        const options = window.meta.field_options.filter(o => o.field_id === fieldId);
-
-                        // debugPrintFieldOptions(fieldId);
-
-                        options.forEach(o => {
-                            const opt = document.createElement('option');
-
-                            console.log("o:", o.option_value, o.option_label);
-
-                            opt.value = o.option_value;
-                            opt.textContent = o.option_label;
-
-                            if (o.option_value === currentValue) {
-                                opt.selected = true;
-                            }
-
-                            bIn.appendChild(opt);
-                        });
-
-
-                    } else {
-                        // Read-only fallback
-                        bIn = document.createElement('input');
-                        bIn.type = 'text';
-                        bIn.className = 'editor-input small-input';
-                        bIn.value = currentValue;
-                        bIn.readOnly = true;
-                    }
-
-                    // Mismatch highlighting
-                    if (!subMod.byteMatches[i]) {
-                        bIn.classList.add("mismatch");
-                    }
-
-                    // Change handler
-                    bIn.addEventListener('change', (e) => {
-                        handleSubModChange(nodeId, idxStr, i, e.target.value);
-                    });
-
-                    bIn.id = `sub-${nodeId}-${idxStr}-raw${i}`;
-                    sRow2.append(bIn);
-                }
-
-
-
-                // const subStateBadge            = document.createElement("span");
-                // subStateBadge.innerText        = subMod.saveStateMatch ? "Save State" : "⚠ Save State";
-                // subStateBadge.style.marginLeft = "8px";
-
-                /** Label for a Save State checkbox */
-                const subSaveStateLabel        = document.createElement('span');
-                subSaveStateLabel.className    = 'label-text';
-                subSaveStateLabel.classList.add('label-text-inside');
-                subSaveStateLabel.innerText    = subMod.saveStateMatch ? "Save State:" : "⚠ Save State:";
-                // subSaveStateLabel.innerText    = "Save State:";
-
-
-                /** Save State checkbox */
-                const saveStateInput           = document.createElement('input');
-                saveStateInput.className       = 'editor-input';
-                saveStateInput.classList.add('small-input');
-                saveStateInput.type            = 'checkbox';
-                saveStateInput.checked         = subMod.saveState;
-                saveStateInput.id              = `sub-mod-${nodeId}-${idxStr}-save-state`;
-                if (!subMod.saveStateMatch) { 
-                    saveStateInput.classList.add("mismatch"); 
-                }
-
-                sRow2.append(subSaveStateLabel, saveStateInput);
-
-                /** Add row1 and row2 to stack */
-                sStack.append(sRow1, sRow2);
-
-                /** Add config stack to the sub-module data container */
-                subDataCell.appendChild(sStack);
-
-                // Bind SUB-MODULE changes to send update
-                const handleSubModChange = () => {
-                    const updatedSubMod = {
-                        ...subMod,
-                        introMsgId: parseInt(subIntroMsg.value, 10),
-                        dataMsgId: parseInt(subDataMsg.value, 10),
-                        dataMsgDlc: parseInt(subDataDlc.value, 10),
-                        rawConfig: [
-                            parseInt(`sub-${nodeId}-${idxStr}-raw0`.value, 10),
-                            parseInt(`sub-${nodeId}-${idxStr}-raw1`.value, 10),
-                            parseInt(`sub-${nodeId}-${idxStr}-raw2`.value, 10)
-                        ]
-                    };
-                    sendConfigUpdate(nodeId, 'SUBMODULE', idx, updatedSubMod);
-                };
-
-                /** Assign onchange handlers */
-                subIntroMsg.onchange = handleSubModChange;
-                subDataMsg.onchange = handleSubModChange;
-                subDataDlc.onchange = handleSubModChange;
-                for (let i = 0; i < SUB_CONFIG_BYTES; i++) {
-                    `sub-${nodeId}-${idxStr}-raw${i}`.onchange = handleSubModChange;
-                }
-                // rawInputs.forEach(input => input.onchange = handleSubModChange);
-
-                container.append(subCmdCell, subIdCell, subDataCell);
+                const [subCmdCell, subIdCell, subDataCell] = renderSubmoduleCard(nodeId, idxStr, subMod);
+                container.append(subCmdCell, subIdCell, subDataCell); /* Add three sub module columns to the grid */;
             } /* End submodule For loop */
         }
     }
