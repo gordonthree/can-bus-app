@@ -645,6 +645,16 @@ function renderSubModRow1(nodeId, idxStr, subMod) {
     }
 
     sRow1.append(dataMsgDlcLabel, subDataDlc);
+    
+    /** bind onchange handlers */
+    subIntroMsg.onchange = (e) =>
+        handleSubModChange(nodeId, idxStr, "introMsgId", parseInt(e.target.value, 10));
+
+    subDataMsg.onchange = (e) =>
+        handleSubModChange(nodeId, idxStr, "dataMsgId", parseInt(e.target.value, 10));
+
+    subDataDlc.onchange = (e) =>
+        handleSubModChange(nodeId, idxStr, "dataMsgDlc", parseInt(e.target.value, 10));
 
     return sRow1;
 }
@@ -685,9 +695,6 @@ function renderSubModRow2(nodeId, idxStr, subMod) {
         rawCfgLabel.innerText = 'Raw Configuration';
     }
     sRow2.append(rawCfgLabel);
-
-    // console.log(`subMod.introMsgId: ${subMod.introMsgId}`);
-
 
     // Fallback if personality defines fewer than 3 fields
     while (labels.length < SUB_CONFIG_BYTES) labels.push(`Raw byte ${labels.length}`);
@@ -756,12 +763,17 @@ function renderSubModRow2(nodeId, idxStr, subMod) {
         }
 
         if (inputType === INPUT_TYPE_SELECT || inputType === INPUT_TYPE_NUMERIC) {
-            /** Add change handler only if input is editable */
             bIn.id = `sub-${nodeId}-${idxStr}-raw${i}`;
+
             bIn.addEventListener('change', (e) => {
-                handleSubModChange(nodeId, idxStr, i, e.target.value);
+                const newValue = (inputType === INPUT_TYPE_NUMERIC)
+                    ? parseInt(e.target.value, 10)
+                    : e.target.value;
+
+                handleSubModChange(nodeId, idxStr, fieldId, newValue);
             });
         }
+
 
         sRow2.append(bIn);
     }
@@ -771,7 +783,6 @@ function renderSubModRow2(nodeId, idxStr, subMod) {
     subSaveStateLabel.className    = 'label-text';
     subSaveStateLabel.classList.add('label-text-inside');
     subSaveStateLabel.innerText    = subMod.saveStateMatch ? "Save State:" : "⚠ Save State:";
-
 
     /** Save State checkbox */
     const saveStateInput           = document.createElement('input');
@@ -786,7 +797,7 @@ function renderSubModRow2(nodeId, idxStr, subMod) {
 
     /** Save state change handler */
     saveStateInput.addEventListener('change', (e) => {
-        handleSubModChange(nodeId, idxStr, i, e.target.value);
+        handleSubModChange(nodeId, idxStr, "saveState", e.target.checked);
     });
 
     /** Add label and checkbox to Row2 */
@@ -849,16 +860,6 @@ function renderSubmoduleCard(nodeId, idxStr, subMod) {
     /** Add config stack to the sub-module data container */
     subDataCell.appendChild(sStack);
 
-    /** TODO Assign onchange handlers */
-    // subIntroMsg.onchange = handleSubModChange;
-    // subDataMsg.onchange = handleSubModChange;
-    // subDataDlc.onchange = handleSubModChange;
-    for (let i = 0; i < SUB_CONFIG_BYTES; i++) {
-        `sub-${nodeId}-${idxStr}-raw${i}`.onchange = handleSubModChange;
-    }
-    // rawInputs.forEach(input => input.onchange = handleSubModChange);
-
-    // container.append(subCmdCell, subIdCell, subDataCell);
     return [subCmdCell, subIdCell, subDataCell];
 }
 
@@ -1005,20 +1006,30 @@ function renderNodeCmdButtons(nodeId, isExpanded) {
     return cmdCell;
 }
 
-function handleSubModChange() {
-    const updatedSubMod = {
-        ...subMod,
-        introMsgId: parseInt(subIntroMsg.value, 10),
-        dataMsgId: parseInt(subDataMsg.value, 10),
-        dataMsgDlc: parseInt(subDataDlc.value, 10),
-        rawConfig: [
-            parseInt(`sub-${nodeId}-${idxStr}-raw0`.value, 10),
-            parseInt(`sub-${nodeId}-${idxStr}-raw1`.value, 10),
-            parseInt(`sub-${nodeId}-${idxStr}-raw2`.value, 10)
-        ]
-    };
-    sendConfigUpdate(nodeId, 'SUBMODULE', idxStr, updatedSubMod);
-};
+function handleSubModChange(nodeId, idxStr, fieldId, newValue) {
+    const subMod = window.canDatabase[nodeId].subModule[idxStr];
+
+    // Update intended state in memory
+    if (fieldId === null) {
+        // Raw byte fallback
+        // rawConfig is always an array of 3 bytes
+        // idxStr is the submodule index, not the byte index
+        // So we need to store raw bytes separately
+        console.warn("Raw byte update needs a byte index — fieldId=null");
+        return;
+    }
+
+    subMod.intended[fieldId] = newValue;
+
+    // Send minimal update to server
+    sendConfigUpdate(nodeId, "SUBMODULE_FIELD", {
+        subModIdx: idxStr,
+        fieldId,
+        value: newValue
+    });
+}
+
+
 
 /**
  * Renders the inline editor for the Node database.
