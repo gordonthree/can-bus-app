@@ -902,7 +902,7 @@ function renderNodeDataCell(nodeId, nodeData) {
     subModCntInput.classList.add('small-input');
     subModCntInput.value       = nodeData.subModCnt;
     subModCntInput.type        = 'text';
-    subModCntInput.inputmode   = 'numeric'; /* Only allow numeric input */
+    subModCntInput.inputMode   = 'numeric'; /* Only allow numeric input */
     subModCntInput.min         = SUBMOD_CNT_MIN;
     subModCntInput.max         = SUBMOD_CNT_MAX;
     subModCntInput.id          = `sub-mod-cnt-${nodeId}`;
@@ -918,10 +918,11 @@ function renderNodeDataCell(nodeId, nodeData) {
     dlcInput.className = 'editor-input';
     dlcInput.classList.add('small-input');
     dlcInput.type = 'text';
-    dlcInput.inputmode = 'numeric'; /* Only allow numeric input */
-    dlcInput.min = DLC_MIN;
-    dlcInput.max = DLC_MAX;
+    dlcInput.inputMode = 'numeric'; /* Only allow numeric input */
+    // dlcInput.min = DLC_MIN; /* Not used */
+    // dlcInput.max = DLC_MAX; /* Not used */
     dlcInput.value = nodeData.nodeTypeDlc;
+    dlcInput.readOnly = true; /* user cannot edit this value */
     dlcInput.id = `node-type-dlc-${nodeId}`;
 
     /** Append the labels and input elements to the wrapper */
@@ -931,19 +932,41 @@ function renderNodeDataCell(nodeId, nodeData) {
     dataCell.appendChild(dataWrapper);    
 
     /** Bind PARENT changes to send update */
-    const handleParentChange = () => {
-        const updatedParent = {
-            ...nodeData, // Keep existing fields
-            nodeTypeMsg: parseInt(nodeTypeSelect.value, 10),
-            subModCnt: parseInt(subModCntInput.value, 10),
-            nodeTypeDlc: parseInt(dlcInput.value, 10)
-        };
-        sendConfigUpdate(nodeId, 'PARENT', null, updatedParent);
+
+    nodeTypeSelect.onchange = () => {
+        const newValue = parseInt(nodeTypeSelect.value, 10);
+
+        sendMessage({
+            type: "PARENT_NODE_FIELD",
+            nodeId,
+            payload: {
+                fieldId: "nodeTypeMsg",
+                value: newValue
+            }
+        });
     };
 
-    nodeTypeSelect.onchange = handleParentChange;
-    subModCntInput.onchange = handleParentChange;
-    dlcInput.onchange = handleParentChange;
+    subModCntInput.onchange = () => {
+        const newValue = parseInt(subModCntInput.value, 10);
+
+        sendMessage({
+            type: "PARENT_NODE_FIELD",
+            nodeId,
+            payload: {
+                fieldId: "subModCnt",
+                value: newValue
+            }
+        });
+    };
+
+    if (nodeData.parentComparison && !nodeData.parentComparison.nodeTypeMatch) {
+        nodeTypeSelect.classList.add("mismatch");
+    }
+
+    if (nodeData.parentComparison && !nodeData.parentComparison.subModCountMatch) {
+        subModCntInput.classList.add("mismatch");
+    }
+
     
     return dataCell;
 }
@@ -962,15 +985,24 @@ function renderNodeIdCell(nodeId, nodeData) {
     /** Add a badge to the node id cell to show sync status */
     const nodeSyncBadge = document.createElement("span");
     nodeSyncBadge.innerText = nodeData.isInSync ? "✓" : "⚠";
-    nodeSyncBadge.style.marginLeft = "8px";
+    nodeSyncBadge.style.color = nodeData.isInSync ? "green" : "red";
+    nodeSyncBadge.style.fontSize = "0.6rem";
+    nodeSyncBadge.style.marginLeft = "6px";
     idCell.appendChild(nodeSyncBadge);
 
 
     const idCellText = document.createElement('span');
-    idCellText.innerText = nodeId.toUpperCase();
+    idCellText.style.fontSize = '0.6rem';
+    idCellText.innerText = "ID: " + nodeId.toUpperCase() 
     idCellText.style.paddingLeft = '4px';
 
-    idCell.append(idCellText);    
+    idCell.appendChild(idCellText);    
+
+    const crcCellText = document.createElement('span');
+    crcCellText.style.fontSize = '0.6rem';
+    crcCellText.style.paddingLeft = '6px';
+    crcCellText.innerText = "CRC: " + nodeData.configCrc;
+    idCell.appendChild(crcCellText);
 
     return idCell;
 }
