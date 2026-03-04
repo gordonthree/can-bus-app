@@ -744,6 +744,8 @@ function compareParentNode(nodeId) {
         configCrcMatch,
         isInSync: nodeTypeMatch && subModCountMatch && configCrcMatch
     };
+
+    return nodeTypeMatch && subModCountMatch && configCrcMatch;
 }
 
 
@@ -1277,12 +1279,16 @@ function updateNodeDatabase(msg) {
 
             /** Check if all submodules are in sync */
             const subsInSync = Object.values(myNode.subModule)
-            .every(sub => sub.isInSync === true);
+                .every(sub => sub.isInSync === true);
+
+            /** compare parent node specific data */
+            const parentInSync = compareParentNode(nodeString);
             
             /** Set a flag for the entire node being "in sync" if all sub-modules are in sync */
             myNode.isInSync = (
                 myNode.subModCountMatch &&
-                subsInSync
+                subsInSync &&
+                parentInSync
             );
 
             /** Sync the in-memory state to SQLite */
@@ -1290,6 +1296,8 @@ function updateNodeDatabase(msg) {
 
             /** Seed the submodules table for this node, only if data does not already exist */
             seedSubModules(nodeString, myNode);
+
+            seedNodeIntendedTable();
 
             // console.log("Node:", nodeString, "interview complete, not sending ack");
         } else {
