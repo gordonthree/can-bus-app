@@ -299,21 +299,97 @@ wss.on('connection', (ws) => {
             const request = JSON.parse(message);
 
             switch (request.type) {
-                case 'UPDATE_NODE_CONFIG':
-                    handleNodeConfigUpdate(ws, request);
+
+                case "PARENT_NODE_FIELD": {
+                    const { fieldId, value } = msg.payload;
+                    const node = canDatabase[nodeId];
+
+                    const column = NODE_FIELD_MAP[fieldId];
+                    if (!column) {
+                        console.warn("Unknown parent node field:", fieldId);
+                        break;
+                    }
+
+                    // Update in-memory intended state
+                    if (!node.intended) node.intended = {};
+                    node.intended[column] = value;
+
+                    // Update SQLite
+                    db.prepare(`
+                        UPDATE node_intended
+                        SET ${column} = ?
+                        WHERE node_id = ?
+                    `).run(value, nodeId);
+
+                    db.prepare(`
+                        UPDATE node_intended
+                        SET ${column} = ?, 
+                        updated_at = ?
+                        WHERE node_id = ?
+                    `).run(value, Date.now(), nodeId);
+
                     break;
+                }
+
+                case "SUBMODULE_FIELD": {
+                    const { subModIdx, fieldId, value } = msg.payload;
+                    const sub = canDatabase[nodeId].subModule[subModIdx];
+
+                    const column = FIELD_MAP[fieldId];
+                    if (!column) {
+                        console.warn("Unknown fieldId:", fieldId);
+                        break;
+                    }
+
+                    const normalizedValue =
+                        column === "save_state" ? Number(value) : value;
+
+                    sub.intended[column] = normalizedValue;
+
+                    db.prepare(`
+                        UPDATE node_submodules
+                        SET ${column} = ?
+                        WHERE node_id = ? AND sub_index = ?
+                    `).run(normalizedValue, nodeId, subModIdx);
+
+                    break;
+                }
+
+
+
+
+                case "SUBMODULE_RAW_BYTE": {
+                    const { subModIdx, byteIndex, value } = msg.payload;
+                    const sub = canDatabase[nodeId].subModule[subModIdx];
+
+                    const column = `config_byte${byteIndex}`;
+
+                    // Update in-memory intended state
+                    sub.intended[column] = value;
+
+                    // Update SQLite
+                    db.prepare(`
+                        UPDATE node_submodules
+                        SET ${column} = ?
+                        WHERE node_id = ? AND sub_index = ?
+                    `).run(value, nodeId, subModIdx);
+
+                    break;
+                }
+
                 
                 case 'SAVE_AUDIT_COMMENT':
                     upsertComment.run(request.auditId, request.comment, Date.now());
                     broadcastAuditLog(); /**< Refresh all clients with the new comment */
                     break;
-                /* Add other message types here as needed */
+
                 case 'GET_DEFINITIONS':
                     ws.send(JSON.stringify({
                         type: 'DEFINITIONS_LIST',
                         payload: selectAllDefinitions.all()
                     }));
                     break;
+
                 case 'REQUEST_NODE_INTERVIEW':
                     if (request.nodeId) {
                         const nodeString = request.nodeId;
@@ -340,6 +416,7 @@ wss.on('connection', (ws) => {
                         console.log(`Sent REQ_NODE_INTRO (0x401) to node: ${nodeString}`);
                     }
                     break;
+                    
                     case 'GET_METADATA':
                         ws.send(JSON.stringify({
                             type: 'DEFINITION_METADATA',
@@ -418,6 +495,21 @@ const insertHistorySnapshot = db.prepare(`
     INSERT INTO node_history (node_id, node_type_msg, sub_mod_cnt, config_crc, recorded_at, full_data)
     VALUES (?, ?, ?, ?, ?, ?)
 `);
+
+/** Field mappings between the UI and the database */
+const FIELD_MAP = {
+    introMsgId:  "personality_id",
+    dataMsgId:   "data_msg_id",
+    dataMsgDlc:  "data_msg_dlc",
+    saveState:   "save_state"
+};
+
+const NODE_FIELD_MAP = {
+    nodeTypeMsg: "node_type_msg",
+    subModCnt:   "submod_count",
+    configCrc:   "config_crc"
+};
+
 
 /* === Functions === */
 
@@ -548,6 +640,29 @@ function seedSubModules(nodeString, myNode) {
     }    
 }
 
+function seedNodeIntendedTable() {
+    const insert = db.prepare(`
+        INSERT OR IGNORE INTO node_intended
+            (node_id, node_type_msg, submod_count, config_crc, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+    `);
+
+    const now = Date.now();
+
+    for (const nodeId of Object.keys(canDatabase)) {
+        const node = canDatabase[nodeId];
+
+        insert.run(
+            nodeId,
+            node.nodeTypeMsg ?? 0,
+            node.subModCnt ?? 0,
+            node.configCrc ?? 0,   // or 0 if you don't have CRC yet
+            now
+        );
+    }
+}
+
+
 /**
  * Retrieve the intended sub-module configuration for a given node ID and sub-index.
  * @param {string} nodeId - The ID of the node.
@@ -587,17 +702,49 @@ function compareSubmodule(reported, intended) {
         personalityMatch: reported.introMsgId === intended.personality_id,
         dataMsgIdMatch:   reported.dataMsgId   === intended.data_msg_id,
         dataMsgDlcMatch:  reported.dataMsgDlc  === intended.data_msg_dlc,
-        saveStateMatch:   reported.saveState   === intended.save_state,
+        saveStateMatch: Number(reported.saveState) === intended.save_state
+,
         byteMatches,
         isInSync:
             reported.introMsgId === intended.personality_id &&
             reported.dataMsgId   === intended.data_msg_id &&
             reported.dataMsgDlc  === intended.data_msg_dlc &&
-            reported.saveState   === intended.save_state &&
+            Number(reported.saveState) === intended.save_state &&
             byteMatches.every(x => x === true)
+
     };
 }
 
+function compareParentNode(nodeId) {
+    const node = canDatabase[nodeId];
+
+    const intended = db.prepare(`
+        SELECT node_type_msg, submod_count, config_crc
+        FROM node_intended
+        WHERE node_id = ?
+    `).get(nodeId);
+
+    if (!intended) {
+        node.parentComparison = {
+            isInSync: false,
+            nodeTypeMatch: false,
+            subModCountMatch: false,
+            configCrcMatch: false
+        };
+        return;
+    }
+
+    const nodeTypeMatch    = node.nodeTypeMsg === intended.node_type_msg;
+    const subModCountMatch = node.subModCnt   === intended.submod_count;
+    const configCrcMatch   = node.configCrc   === intended.config_crc;
+
+    node.parentComparison = {
+        nodeTypeMatch,
+        subModCountMatch,
+        configCrcMatch,
+        isInSync: nodeTypeMatch && subModCountMatch && configCrcMatch
+    };
+}
 
 
 /**
