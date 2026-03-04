@@ -7,7 +7,8 @@ let statusDiv;
 let filterInput;
 let filterDisplay;
 let allDefinitions = [];
-let nodeDb;
+/** copy of the in-memory CAN bus database from the server */
+let canDatabase; 
 
 /** Set of active filters */
 const activeFilters   = new Set();
@@ -221,7 +222,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 /** * We don't render until we have definitions to ensure 
                  * dropdowns and labels have the data they need.
                  */
-                nodeDb = message.payload;
+                canDatabase = message.payload;
                 tryDBRender(); /* Attempt to render the node database */
                 break;
 
@@ -261,8 +262,8 @@ document.addEventListener('DOMContentLoaded', () => {
 /* === Functions === */
 
 function tryDBRender() {
-    if (allDefinitions.length > 0 && window.meta && nodeDb) {
-        renderNodeDatabase(nodeDb);
+    if (allDefinitions.length > 0 && window.meta && canDatabase) {
+        renderNodeDatabase(canDatabase);
     }
 }
 
@@ -341,13 +342,15 @@ function buildDropdown(definitions, minId, maxId, currentValue) {
         optionItem.innerText = '0x000 - UNKNOWN/NONE';
         optionItem.title = 'No definitions found';
         dropDown.appendChild(optionItem);
+
+        // NEW: Set dropdown-level title for the error case
+        dropDown.title = 'No definitions found';
+
         return dropDown;
     } 
 
     // Filter definitions based on the allowed range for this field
     const validDefs = definitions.filter(def => def.id_dec >= minId && def.id_dec <= maxId);
-
-    // console.log(definitions);
 
     validDefs.forEach(def => {
         /* Check if current definition matches the target value */
@@ -360,21 +363,39 @@ function buildDropdown(definitions, minId, maxId, currentValue) {
         dropDown.appendChild(optionItem);
     });
 
-        // optionsHtml += `<option title="${def.description}" value="${def.id_dec}" ${isSelected}>${def.id_hex} - ${def.name}</option>`;
-
     // Fallback in case the current value isn't in definitions but isn't 0
     if (currentValue !== 0 && !validDefs.some(def => def.id_dec === currentValue)) {
         const optionItem = document.createElement('option');
         optionItem.value = currentValue;
         optionItem.innerText = '0x' + currentValue.toString(16).toUpperCase() + ' - CUSTOM';
         optionItem.selected = true;
+        optionItem.title = 'Custom / Unknown definition';
         dropDown.appendChild(optionItem);
-        // const currentHex = '0x' + currentValue.toString(16).toUpperCase();
-        // optionsHtml += `<option value="${currentValue}" selected>${currentHex} - CUSTOM</option>`;
     }
+
+    /** 
+     * Set initial title for the dropdown itself based on the selected option.
+     * This gives a tooltip when hovering over the closed dropdown.
+     */
+    const selectedOption = dropDown.options[dropDown.selectedIndex];
+    dropDown.title = selectedOption?.title || "";
+
+    /**
+     * Update the dropdown's title dynamically whenever the user changes
+     * the selected option. This keeps the tooltip accurate without requiring
+     * a full UI re-render.
+     *
+     * addEventListener does NOT override any onchange handler attached later by the caller.
+     */
+    dropDown.addEventListener('change', () => {
+        const opt = dropDown.options[dropDown.selectedIndex];
+        dropDown.title = opt?.title || "";
+    });
+
 
     return dropDown;
 }
+
 
 /**
  * Sends an updated configuration payload to the server.
@@ -603,8 +624,8 @@ function renderSubModRow1(nodeId, idxStr, subMod) {
     introMsgLabel.className = 'label-text';
     introMsgLabel.innerText = 'Intro ID:';
 
-    let subIntroMsg = document.createElement('select');
-    subIntroMsg = buildDropdown(allDefinitions, SUBMOD_INTRO_BEGIN, SUBMOD_INTRO_END, subMod.introMsgId);
+    // let subIntroMsg = document.createElement('select');
+    const subIntroMsg = buildDropdown(allDefinitions, SUBMOD_INTRO_BEGIN, SUBMOD_INTRO_END, subMod.introMsgId);
     subIntroMsg.className = 'editor-input';
     subIntroMsg.id = `sub-mod-${nodeId}-${idxStr}-intro-id`;
     if (!subMod.personalityMatch) {
@@ -619,8 +640,8 @@ function renderSubModRow1(nodeId, idxStr, subMod) {
     dataMsgLabel.classList.add('label-text-inside');
     dataMsgLabel.innerText = 'Data ID:';
 
-    let subDataMsg = document.createElement('select');
-    subDataMsg = buildDropdown(allDefinitions, SUBMOD_DATA_BEGIN, SUBMOD_DATA_END, subMod.dataMsgId);
+    // let subDataMsg = document.createElement('select');
+    const subDataMsg = buildDropdown(allDefinitions, SUBMOD_DATA_BEGIN, SUBMOD_DATA_END, subMod.dataMsgId);
     subDataMsg.className = 'editor-input';
     subDataMsg.id = `sub-mod-${nodeId}-${idxStr}-data-id`;
     sRow1.append(dataMsgLabel, subDataMsg);
@@ -647,14 +668,21 @@ function renderSubModRow1(nodeId, idxStr, subMod) {
     sRow1.append(dataMsgDlcLabel, subDataDlc);
     
     /** bind onchange handlers */
-    subIntroMsg.onchange = (e) =>
-        handleSubModChange(nodeId, idxStr, "introMsgId", parseInt(e.target.value, 10));
+    subIntroMsg.onchange = () => {
+        subIntroMsg.classList.remove("mismatch");
+        handleSubModChange(nodeId, idxStr, "introMsgId", parseInt(subIntroMsg.value, 10));
+    };
 
-    subDataMsg.onchange = (e) =>
-        handleSubModChange(nodeId, idxStr, "dataMsgId", parseInt(e.target.value, 10));
+    subDataMsg.onchange = () => {
+        subDataMsg.classList.remove("mismatch");
+        handleSubModChange(nodeId, idxStr, "dataMsgId", parseInt(subDataMsg.value, 10));
+    };
 
-    subDataDlc.onchange = (e) =>
-        handleSubModChange(nodeId, idxStr, "dataMsgDlc", parseInt(e.target.value, 10));
+    subDataDlc.onchange = () => {
+        subDataDlc.classList.remove("mismatch");
+        handleSubModChange(nodeId, idxStr, "dataMsgDlc", parseInt(subDataDlc.value, 10));
+    };
+
 
     return sRow1;
 }
@@ -889,7 +917,7 @@ function renderNodeDataCell(nodeId, nodeData) {
     nodeTypeSelect = buildDropdown(allDefinitions, NODE_INTRO_MSG_BEGIN, NODE_INTRO_MSG_END, nodeData.nodeTypeMsg);
     nodeTypeSelect.className = 'editor-input';
     nodeTypeSelect.id = `node-type-${nodeId}`;
-    
+   
     /** Create label for the Sub-Module Count */
     const subLabel = document.createElement('span');
     subLabel.className = 'label-text';
@@ -931,8 +959,9 @@ function renderNodeDataCell(nodeId, nodeData) {
     /** Append the wrapper to the data cell, only one row for the parent node */
     dataCell.appendChild(dataWrapper);    
 
-    /** Bind PARENT changes to send update */
 
+
+    /** Bind PARENT changes to send update */
     nodeTypeSelect.onchange = () => {
         const newValue = parseInt(nodeTypeSelect.value, 10);
 
@@ -1046,7 +1075,7 @@ function renderNodeCmdButtons(nodeId, isExpanded) {
 }
 
 function handleSubModChange(nodeId, idxStr, fieldId, newValue) {
-    const subMod = window.canDatabase[nodeId].subModule[idxStr];
+    const subMod = canDatabase[nodeId].subModule[idxStr];
 
     // Update intended state in memory
     if (fieldId === null) {
@@ -1069,7 +1098,7 @@ function handleSubModChange(nodeId, idxStr, fieldId, newValue) {
 }
 
 function handleRawByteChange(nodeId, idxStr, byteIndex, newValue) {
-    const subMod = window.canDatabase[nodeId].subModule[idxStr];
+    const subMod = canDatabase[nodeId].subModule[idxStr];
 
     // Update intended raw byte in memory
     subMod.rawConfig[byteIndex] = newValue;
@@ -1142,7 +1171,7 @@ window.toggleNode = function(nodeId) {
     }
     // Re-render immediately to show/hide submodules (assuming 'nodes' is stored globally)
     // If your app holds `window.currentNodes`, call renderNodeDatabase(window.currentNodes) here.
-    renderNodeDatabase(nodeDb);
+    renderNodeDatabase(canDatabase);
 };
 
 /**
