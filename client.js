@@ -249,6 +249,63 @@ function tryDBRender() {
     }
 }
 
+function debugPrintPF(pf) {
+    if (!pf || pf.length === 0) {
+        console.log("PF: <empty>");
+        return;
+    }
+
+    console.log("PF (personality_fields):");
+    console.table(
+        pf.map(p => ({
+            field_index: p.field_index,
+            field_id: p.field_id,
+            personality_id: p.personality_id,
+            created_at: p.created_at
+        }))
+    );
+}
+
+function debugPrintFields(fields) {
+    if (!fields || fields.length === 0) {
+        console.log("Fields: <empty>");
+        return;
+    }
+
+    console.log("Fields (fields table):");
+    console.table(
+        fields.map(f => ({
+            field_id: f.field_id,
+            name: f.name,
+            input_type: f.input_type,
+            description: f.description
+        }))
+    );
+}
+
+function debugPrintFieldOptions(fieldId) {
+    const opts = window.meta.field_options.filter(o => o.field_id === fieldId);
+
+    if (opts.length === 0) {
+        console.log(`No field_options found for field_id ${fieldId}`);
+        return;
+    }
+
+    console.log(`Options for field_id ${fieldId}:`);
+    console.table(
+        opts.map(o => ({
+            field_id: o.field_id,
+            option_id: o.id || o.option_id,
+            value: o.value,
+            label: o.label,
+            name: o.name,
+            description: o.description
+        }))
+    );
+}
+
+
+
 /**
  * Helper to build a dropdown select element.
  * @param {Array} definitions - The allDefinitions array.
@@ -681,6 +738,8 @@ function renderNodeDatabase(nodes) {
             for (const [idxStr, subMod] of Object.entries(nodeData.subModule)) {
                 /* Remember grid is only three columns wide now */
 
+
+
                 /* === First column: Sub-module Command Cell */
                 const subCmdCell = document.createElement('div');
                 subCmdCell.className = 'data-cell';
@@ -782,15 +841,29 @@ function renderNodeDatabase(nodes) {
                 // --- Metadata-driven field lookup ---
                 const pf = window.meta.personality_fields
                     .filter(p => p.personality_id === subMod.introMsgId)
-                    .sort((a, b) => a.field_order - b.field_order);
+                    .sort((a, b) => a.field_index - b.field_index);
+
+
+                /* Debugging prints */
+                const hexMsg = '0x' + subMod.introMsgId.toString(16);
+                console.log("introMsgId:", hexMsg, subMod.introMsgId);
+                // debugPrintPF(pf);
+                // debugPrintFields(window.meta.fields);
+
+                // console.log("PF:", pf);
+                // console.log("Fields:", window.meta.fields);
 
                 // Extract labels, input types, and field IDs
                 const labels = pf.map(p => {
                     const field = window.meta.fields.find(f => f.field_id === p.field_id);
-                    return field ? field.label : `Raw byte ${p.field_order}`;
+                    return field ? field.name : `Raw byte ${p.field_index}`;
                 });
 
-                const inputTypes = pf.map(p => p.input_type);
+                const inputTypes = pf.map(p => {
+                    const field = window.meta.fields.find(f => f.field_id === p.field_id);
+                    return field ? field.input_type : 0;
+                });
+
                 const fieldIds = pf.map(p => p.field_id);
 
                 // Fallback if personality defines fewer than 3 fields
@@ -828,17 +901,27 @@ function renderNodeDatabase(nodes) {
                     } else if (inputType === 2) {
                         // Dropdown from metadata
                         bIn = document.createElement('select');
-                        bIn.className = 'editor-input small-input';
+                        bIn.className = 'editor-input';
 
                         const options = window.meta.field_options.filter(o => o.field_id === fieldId);
 
+                        // debugPrintFieldOptions(fieldId);
+
                         options.forEach(o => {
                             const opt = document.createElement('option');
-                            opt.value = o.value;
-                            opt.textContent = o.label;
-                            if (o.value === currentValue) opt.selected = true;
+
+                            console.log("o:", o.option_value, o.option_label);
+
+                            opt.value = o.option_value;
+                            opt.textContent = o.option_label;
+
+                            if (o.option_value === currentValue) {
+                                opt.selected = true;
+                            }
+
                             bIn.appendChild(opt);
                         });
+
 
                     } else {
                         // Read-only fallback
