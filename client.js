@@ -843,16 +843,6 @@ function renderNodeDatabase(nodes) {
                     .filter(p => p.personality_id === subMod.introMsgId)
                     .sort((a, b) => a.field_index - b.field_index);
 
-
-                /* Debugging prints */
-                const hexMsg = '0x' + subMod.introMsgId.toString(16);
-                console.log("introMsgId:", hexMsg, subMod.introMsgId);
-                // debugPrintPF(pf);
-                // debugPrintFields(window.meta.fields);
-
-                // console.log("PF:", pf);
-                // console.log("Fields:", window.meta.fields);
-
                 // Extract labels, input types, and field IDs
                 const labels = pf.map(p => {
                     const field = window.meta.fields.find(f => f.field_id === p.field_id);
