@@ -770,13 +770,20 @@ function renderSubModRow2(nodeId, idxStr, subMod) {
                     ? parseInt(e.target.value, 10)
                     : e.target.value;
 
-                handleSubModChange(nodeId, idxStr, fieldId, newValue);
+                if (fieldId === null) {
+                    // Raw byte fallback
+                    handleRawByteChange(nodeId, idxStr, i, newValue);
+                } else {
+                    // Normal metadata-driven field
+                    handleSubModChange(nodeId, idxStr, fieldId, newValue);
+                }
             });
         }
 
 
+
         sRow2.append(bIn);
-    }
+    } /* End config input loop */
 
     /** Label for a Save State checkbox */
     const subSaveStateLabel        = document.createElement('span');
@@ -1029,6 +1036,19 @@ function handleSubModChange(nodeId, idxStr, fieldId, newValue) {
     });
 }
 
+function handleRawByteChange(nodeId, idxStr, byteIndex, newValue) {
+    const subMod = window.canDatabase[nodeId].subModule[idxStr];
+
+    // Update intended raw byte in memory
+    subMod.rawConfig[byteIndex] = newValue;
+
+    // Send minimal update to server
+    sendConfigUpdate(nodeId, "SUBMODULE_RAW_BYTE", {
+        subModIdx: idxStr,
+        byteIndex,
+        value: newValue
+    });
+}
 
 
 /**
