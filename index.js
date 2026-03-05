@@ -377,7 +377,11 @@ wss.on('connection', (ws) => {
                         const targetNodeId = hexStringToByteArray(nodeId);
 
                         // Construct and send the CAN message (your existing helper)
+                        /** send persist changes command */
                         writeCanMessageBE(CAN_MSG.CFG_WRITE_NVS_ID, targetNodeId);
+                        /** send reboot command */
+                        writeCanMessageBE(CAN_MSG.CFG_REBOOT_ID, targetNodeId);
+
 
                         console.log(`Sent CFG_WRITE_NVS (0x436) to node ${nodeId}`);
                         break;
