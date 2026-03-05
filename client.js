@@ -937,6 +937,7 @@ function renderNodeDataCell(nodeId, nodeData) {
     subModCntInput.inputMode   = 'numeric'; /* Only allow numeric input */
     subModCntInput.min         = SUBMOD_CNT_MIN;
     subModCntInput.max         = SUBMOD_CNT_MAX;
+    subModCntInput.readOnly    = true;
     subModCntInput.id          = `sub-mod-cnt-${nodeId}`;
 
     /** Create label for the DLC input */
@@ -988,9 +989,9 @@ function renderNodeDataCell(nodeId, nodeData) {
         nodeTypeSelect.classList.add("mismatch");
     }
 
-    if (nodeData.parentComparison && !nodeData.parentComparison.subModCountMatch) {
-        subModCntInput.classList.add("mismatch");
-    }
+    // if (nodeData.parentComparison && !nodeData.parentComparison.subModCountMatch) {
+    //     subModCntInput.classList.add("mismatch");
+    // }
 
     
     return dataCell;
