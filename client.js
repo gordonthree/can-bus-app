@@ -401,25 +401,23 @@ function buildDropdown(definitions, minId, maxId, currentValue) {
  * Sends an updated configuration payload to the server.
  * @param {String} nodeId - The 32-bit Node ID.
  * @param {String} target - Either 'PARENT' or 'SUBMODULE'.
- * @param {Number} subModIdx - The index of the sub-module (if applicable).
  * @param {Object} payload - The complete data object for the parent or sub-module.
  */
-function sendConfigUpdate(nodeId, target, subModIdx, payload) {
+function sendConfigUpdate(nodeId, target, payload) {
     if (!socket || socket.readyState !== WebSocket.OPEN) {
         console.error("Cannot send update, WebSocket is not open.");
         return;
     }
 
     const message = {
-        type: 'UPDATE_NODE_CONFIG',
-        nodeId: nodeId,
-        configTarget: target, // 'PARENT' or 'SUBMODULE'
-        subModIdx: subModIdx, // null if updating parent
-        payload: payload
+        type: "UPDATE_NODE_CONFIG",
+        configTarget: target,
+        nodeId,
+        payload
     };
 
     console.log("Sending update:", JSON.stringify(message, null, 2));
-    // socket.send(JSON.stringify(message));
+    socket.send(JSON.stringify(message));
 }
 
 /**
@@ -431,6 +429,7 @@ function persistNodeToBus(nodeId) {
     
     socket.send(JSON.stringify({
         type: 'SAVE_TO_BUS',
+        canMsg: 'CFG_WRITE_NVS', // server should send 0x436 CFG_WRITE_NVS
         nodeId: nodeId
     }));
     
@@ -481,7 +480,12 @@ function connect() {
         statusDiv.style.color = '#f44747';
     };
 
-    /* ... include your existing onmessage and onopen handlers ... */
+    socket.onopen = () => {
+        if (statusDiv) {
+            statusDiv.innerText = 'Status: Connected';
+            statusDiv.style.color = '#4ec9b0';
+        }
+    };
 }
 
 document.addEventListener('DOMContentLoaded', connect);
@@ -960,33 +964,25 @@ function renderNodeDataCell(nodeId, nodeData) {
     dataCell.appendChild(dataWrapper);    
 
 
-
     /** Bind PARENT changes to send update */
     nodeTypeSelect.onchange = () => {
         const newValue = parseInt(nodeTypeSelect.value, 10);
 
-        sendMessage({
-            type: "PARENT_NODE_FIELD",
-            nodeId,
-            payload: {
-                fieldId: "nodeTypeMsg",
-                value: newValue
-            }
+        sendConfigUpdate(nodeId, "PARENT_NODE_FIELD", {
+            fieldId: "nodeTypeMsg",
+            value: newValue
         });
     };
 
     subModCntInput.onchange = () => {
         const newValue = parseInt(subModCntInput.value, 10);
 
-        sendMessage({
-            type: "PARENT_NODE_FIELD",
-            nodeId,
-            payload: {
-                fieldId: "subModCnt",
-                value: newValue
-            }
+        sendConfigUpdate(nodeId, "PARENT_NODE_FIELD", {
+            fieldId: "subModCnt",
+            value: newValue
         });
     };
+
 
     if (nodeData.parentComparison && !nodeData.parentComparison.nodeTypeMatch) {
         nodeTypeSelect.classList.add("mismatch");
@@ -1088,27 +1084,28 @@ function handleSubModChange(nodeId, idxStr, fieldId, newValue) {
     }
 
     subMod.intended[fieldId] = newValue;
-
-    // Send minimal update to server
-    sendConfigUpdate(nodeId, "SUBMODULE_FIELD", {
+    const payload = {
         subModIdx: idxStr,
         fieldId,
         value: newValue
-    });
+    };
+
+    sendConfigUpdate(nodeId, "SUBMODULE_FIELD", payload);
 }
+
 
 function handleRawByteChange(nodeId, idxStr, byteIndex, newValue) {
     const subMod = canDatabase[nodeId].subModule[idxStr];
 
     // Update intended raw byte in memory
     subMod.rawConfig[byteIndex] = newValue;
-
-    // Send minimal update to server
-    sendConfigUpdate(nodeId, "SUBMODULE_RAW_BYTE", {
+    const payload = {
         subModIdx: idxStr,
         byteIndex,
         value: newValue
-    });
+    };
+    // Send minimal update to server
+    sendConfigUpdate(nodeId, "SUBMODULE_RAW_BYTE", payload);
 }
 
 
