@@ -975,14 +975,14 @@ function renderNodeDataCell(nodeId, nodeData) {
         });
     };
 
-    subModCntInput.onchange = () => {
-        const newValue = parseInt(subModCntInput.value, 10);
+    // subModCntInput.onchange = () => {
+    //     const newValue = parseInt(subModCntInput.value, 10);
 
-        sendConfigUpdate(nodeId, "PARENT_NODE_FIELD", {
-            fieldId: "subModCnt",
-            value: newValue
-        });
-    };
+    //     sendConfigUpdate(nodeId, "PARENT_NODE_FIELD", {
+    //         fieldId: "subModCnt",
+    //         value: newValue
+    //     });
+    // };
 
 
     if (nodeData.parentComparison && !nodeData.parentComparison.nodeTypeMatch) {
