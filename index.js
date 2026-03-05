@@ -152,7 +152,7 @@ const sendTsInterval = 10000;
 
 /* === State and Initialization === */
 
-/** In-memory database for CAN messages */
+/** Create In-memory database for CAN messages */
 const canDatabase = {};
 
 /** Timestamp of last "request intro" message */
@@ -296,141 +296,159 @@ wss.on('connection', (ws) => {
 
    ws.on('message', (message) => {
         try {
+            /** JSON from the client */
             const request = JSON.parse(message);
 
-            switch (request.type) {
+            console.log(`Received JSON: ${JSON.stringify(request, null, 2)}`);
 
-                case "PARENT_NODE_FIELD": {
-                    const { fieldId, value } = msg.payload;
-                    const node = canDatabase[nodeId];
+            const requestType = request.type;
 
-                    const column = NODE_FIELD_MAP[fieldId];
-                    if (!column) {
-                        console.warn("Unknown parent node field:", fieldId);
-                        break;
-                    }
+            if (requestType === "UPDATE_NODE_CONFIG") {
+                const configTarget = request.configTarget;
 
-                    // Update in-memory intended state
-                    if (!node.intended) node.intended = {};
-                    node.intended[column] = value;
-
-                    // Update SQLite
-                    db.prepare(`
-                        UPDATE node_intended
-                        SET ${column} = ?
-                        WHERE node_id = ?
-                    `).run(value, nodeId);
-
-                    db.prepare(`
-                        UPDATE node_intended
-                        SET ${column} = ?, 
-                        updated_at = ?
-                        WHERE node_id = ?
-                    `).run(value, Date.now(), nodeId);
-
-                    break;
-                }
-
-                case "SUBMODULE_FIELD": {
-                    const { subModIdx, fieldId, value } = msg.payload;
-                    const sub = canDatabase[nodeId].subModule[subModIdx];
-
-                    const column = FIELD_MAP[fieldId];
-                    if (!column) {
-                        console.warn("Unknown fieldId:", fieldId);
-                        break;
-                    }
-
-                    const normalizedValue =
-                        column === "save_state" ? Number(value) : value;
-
-                    sub.intended[column] = normalizedValue;
-
-                    db.prepare(`
-                        UPDATE node_submodules
-                        SET ${column} = ?
-                        WHERE node_id = ? AND sub_index = ?
-                    `).run(normalizedValue, nodeId, subModIdx);
-
-                    break;
-                }
-
-
-
-
-                case "SUBMODULE_RAW_BYTE": {
-                    const { subModIdx, byteIndex, value } = msg.payload;
-                    const sub = canDatabase[nodeId].subModule[subModIdx];
-
-                    const column = `config_byte${byteIndex}`;
-
-                    // Update in-memory intended state
-                    sub.intended[column] = value;
-
-                    // Update SQLite
-                    db.prepare(`
-                        UPDATE node_submodules
-                        SET ${column} = ?
-                        WHERE node_id = ? AND sub_index = ?
-                    `).run(value, nodeId, subModIdx);
-
-                    break;
-                }
-
-                
-                case 'SAVE_AUDIT_COMMENT':
-                    upsertComment.run(request.auditId, request.comment, Date.now());
-                    broadcastAuditLog(); /**< Refresh all clients with the new comment */
-                    break;
-
-                case 'GET_DEFINITIONS':
-                    ws.send(JSON.stringify({
-                        type: 'DEFINITIONS_LIST',
-                        payload: selectAllDefinitions.all()
-                    }));
-                    break;
-
-                case 'REQUEST_NODE_INTERVIEW':
-                    if (request.nodeId) {
-                        const nodeString = request.nodeId;
+                switch (configTarget) {
+                    case "PARENT_NODE_FIELD": {
                         
-                        /** * Documentation-First Cleanup:
-                         * Reset the in-memory state so the engine re-ingests all frames.
-                         */
-                        if (canDatabase[nodeString]) {
-                            console.log(`Resetting inventory for ${nodeString} before re-interview...`);
-                            
-                            /** Clear sub-modules and reset tracking indices */
-                            canDatabase[nodeString].subModule     = {};
-                            canDatabase[nodeString].lastSubModIdx = 0;
-                            canDatabase[nodeString].introComplete = false;
+                        const { nodeId } = request; 
+                        const { fieldId, value } = request.payload;
+
+                        const node = canDatabase[nodeId];
+
+                        console.log(`updating parent node ${nodeId} field ${fieldId} to ${value}`);
+
+                        const column = NODE_FIELD_MAP[fieldId];
+                        if (!column) {
+                            console.warn("Unknown parent node field:", fieldId);
+                            break;
                         }
 
-                        /** Broadcast the cleared state to all clients so the UI updates immediately */
-                        broadcastDatabase();
+                        // Update in-memory intended state
+                        if (!node.intended) node.intended = {};
+                        node.intended[column] = value;
 
-                        /** Construct and send the CAN command */
-                        const targetNodeId = hexStringToByteArray(nodeString);
-                        writeCanMessageBE(CAN_MSG.REQ_NODE_INTRO_ID, targetNodeId);
-                        
-                        console.log(`Sent REQ_NODE_INTRO (0x401) to node: ${nodeString}`);
+                        // Update SQLite
+                        db.prepare(`
+                            UPDATE node_intended
+                            SET ${column} = ?
+                            WHERE node_id = ?
+                        `).run(value, nodeId);
+
+                        db.prepare(`
+                            UPDATE node_intended
+                            SET ${column} = ?, 
+                            updated_at = ?
+                            WHERE node_id = ?
+                        `).run(value, Date.now(), nodeId);
+
+                        break;
                     }
-                    break;
-                    
-                    case 'GET_METADATA':
+
+                    case "SUBMODULE_FIELD": {
+                        const { nodeId } = request;
+                        const { fieldId, value, subModIdx } = request.payload;
+                        const sub = canDatabase[nodeId].subModule[subModIdx];
+
+                        console.log(`updating node ${nodeId} submodule ${subModIdx} field ${fieldId} to ${value}`);
+
+                        const column = FIELD_MAP[fieldId];
+                        if (!column) {
+                            console.warn("Unknown fieldId:", fieldId);
+                            break;
+                        }
+
+                        const normalizedValue =
+                            column === "save_state" ? Number(value) : value;
+
+                        sub.intended[column] = normalizedValue;
+
+                        db.prepare(`
+                            UPDATE node_submodules
+                            SET ${column} = ?
+                            WHERE node_id = ? AND sub_index = ?
+                        `).run(normalizedValue, nodeId, subModIdx);
+
+                        break;
+                    }
+                   case "SUBMODULE_RAW_BYTE": {
+                        const { nodeId } = request; 
+                        const { subModIdx, byteIndex, value } = request.payload;
+                        const sub = canDatabase[nodeId].subModule[subModIdx];
+
+                        const column = `config_byte${byteIndex}`;
+
+                        // Update in-memory intended state
+                        sub.intended[column] = value;
+
+                        // Update SQLite
+                        db.prepare(`
+                            UPDATE node_submodules
+                            SET ${column} = ?
+                            WHERE node_id = ? AND sub_index = ?
+                        `).run(value, nodeId, subModIdx);
+
+                        break;
+                    }
+                    default:
+                        console.warn(`Unknown node config target: ${configTarget}`);
+                }
+            } else {
+
+                switch (request.type) {
+
+                    case 'SAVE_AUDIT_COMMENT':
+                        upsertComment.run(request.auditId, request.comment, Date.now());
+                        broadcastAuditLog(); /**< Refresh all clients with the new comment */
+                        break;
+
+                    case 'GET_DEFINITIONS':
                         ws.send(JSON.stringify({
-                            type: 'DEFINITION_METADATA',
-                            payload: {
-                                personalities: selectAllPersonalities.all(),
-                                fields: selectAllFields.all(),
-                                personality_fields: selectAllPersonalityFields.all(),
-                                field_options: selectAllFieldOptions.all()
-                            }
+                            type: 'DEFINITIONS_LIST',
+                            payload: selectAllDefinitions.all()
                         }));
                         break;
 
-                default:
-                    console.warn(`Unknown message type: ${request.type}`);
+                    case 'REQUEST_NODE_INTERVIEW':
+                        if (request.nodeId) {
+                            const nodeString = request.nodeId;
+                            
+                            /** * Documentation-First Cleanup:
+                             * Reset the in-memory state so the engine re-ingests all frames.
+                             */
+                            if (canDatabase[nodeString]) {
+                                console.log(`Resetting inventory for ${nodeString} before re-interview...`);
+                                
+                                /** Clear sub-modules and reset tracking indices */
+                                canDatabase[nodeString].subModule     = {};
+                                canDatabase[nodeString].lastSubModIdx = 0;
+                                canDatabase[nodeString].introComplete = false;
+                            }
+
+                            /** Broadcast the cleared state to all clients so the UI updates immediately */
+                            broadcastDatabase();
+
+                            /** Construct and send the CAN command */
+                            const targetNodeId = hexStringToByteArray(nodeString);
+                            writeCanMessageBE(CAN_MSG.REQ_NODE_INTRO_ID, targetNodeId);
+                            
+                            console.log(`Sent REQ_NODE_INTRO (0x401) to node: ${nodeString}`);
+                        }
+                        break;
+                        
+                        case 'GET_METADATA':
+                            ws.send(JSON.stringify({
+                                type: 'DEFINITION_METADATA',
+                                payload: {
+                                    personalities: selectAllPersonalities.all(),
+                                    fields: selectAllFields.all(),
+                                    personality_fields: selectAllPersonalityFields.all(),
+                                    field_options: selectAllFieldOptions.all()
+                                }
+                            }));
+                            break;
+
+                    default:
+                        console.warn(`Unknown message type: ${request.type}`);
+                }
             }
         } catch (err) {
             console.error('Failed to parse WebSocket message:', err);
@@ -815,107 +833,6 @@ function getSubModuleHistory(nodeId, subIdx) {
     });
 }
 
-/**
- * Processes an incoming configuration update from the client editor.
- * Compares incoming data with in-memory data to prevent redundant updates.
- * @param {Object} msg - The parsed WebSocket message object.
- */
-function handleNodeConfigUpdate(msg) {
-    const { nodeId, configTarget, subModIdx, payload } = msg;
-
-    // Assuming your in-memory database is called `nodeDatabase`
-    if (!nodeDatabase[nodeId]) {
-        console.warn(`[Config Update] Node ${nodeId} not found in database.`);
-        return;
-    }
-
-    let hasChanges = false;
-    const targetNode = nodeDatabase[nodeId];
-
-    if (configTarget === 'PARENT') {
-        // Compare parent fields
-        if (targetNode.nodeTypeMsg !== payload.nodeTypeMsg ||
-            targetNode.nodeTypeDlc !== payload.nodeTypeDlc ||
-            targetNode.subModCnt !== payload.subModCnt) {
-            
-            // Apply updates
-            targetNode.nodeTypeMsg = payload.nodeTypeMsg;
-            targetNode.nodeTypeDlc = payload.nodeTypeDlc;
-            targetNode.subModCnt = payload.subModCnt;
-            
-            hasChanges = true;
-        }
-        
-    } else if (configTarget === 'SUBMODULE') {
-        // Ensure subModule object exists
-        if (!targetNode.subModule) {
-            targetNode.subModule = {};
-        }
-        if (!targetNode.subModule[subModIdx]) {
-            targetNode.subModule[subModIdx] = {}; // Initialize if brand new
-            hasChanges = true; 
-        }
-
-        const targetSub = targetNode.subModule[subModIdx];
-
-        // Compare standard sub-module fields
-        if (targetSub.introMsgId !== payload.introMsgId ||
-            targetSub.dataMsgId !== payload.dataMsgId ||
-            targetSub.dataMsgDlc !== payload.dataMsgDlc) {
-            
-            targetSub.introMsgId = payload.introMsgId;
-            targetSub.dataMsgId = payload.dataMsgId;
-            targetSub.dataMsgDlc = payload.dataMsgDlc;
-            hasChanges = true;
-        }
-
-        // Deep compare the rawConfig array (3 bytes)
-        if (!targetSub.rawConfig) targetSub.rawConfig = [0, 0, 0];
-        for (let i = 0; i < 3; i++) {
-            if (targetSub.rawConfig[i] !== payload.rawConfig[i]) {
-                targetSub.rawConfig[i] = payload.rawConfig[i];
-                hasChanges = true;
-            }
-        }
-    }
-
-    const hasChanged = hasChanges;
-
-    /** * 3. Atomic Database Sync and History Snapshot
-     */
-    if (hasChanged) {
-        nodeData.lastSeen = Date.now(); 
-
-        try {
-            /* Execute inventory update and history snapshot in a single synchronous transaction */
-            const updateTransaction = db.transaction((id, info) => {
-                // This updates the 'current' row
-                syncNodeToDatabase(id, info); 
-                // This inserts the 'historical' row
-                insertHistorySnapshot.run(
-                    id, info.nodeTypeMsg, info.subModCnt, info.config_crc, Date.now(), JSON.stringify(info.subModule)
-                );
-            });
-
-            /** Record the transaction in database */
-            updateTransaction(nodeId, nodeData);
-
-            /** Send updated log to connected WS clients */
-            broadcastAuditLog();
-
-            ws.send(JSON.stringify({
-                type: 'UPDATE_ACK',
-                nodeId: nodeId,
-                subModIdx: subModIdx,
-                success: true
-            }));
-            
-            console.log(`Node ${nodeId} updated, archived, and ACK sent.`);
-        } catch (dbErr) {
-            console.error(`Database transaction failed for ${nodeId}:`, dbErr);
-        }
-    }
-}
 
 /**
  * Constructs an 8-byte CAN payload:
