@@ -322,6 +322,10 @@ wss.on('connection', (ws) => {
                         /** write changes to the bus */
                         dispatchParentNodeField(nodeId, fieldId, value);
 
+                        /** Recalc + persist intended CRC */
+                        const crc = updateCalculatedCRC(nodeId);
+                        updateParentNodeField(nodeId, "configCrc", crc);
+
                         break;
                     }
 
@@ -338,6 +342,10 @@ wss.on('connection', (ws) => {
                         /** write changes to the bus */
                         dispatchSubmoduleField(nodeId, subModIdx, fieldId, value);
 
+                        /** Recalc + persist intended CRC */
+                        const crc = updateCalculatedCRC(nodeId);
+                        updateParentNodeField(nodeId, "configCrc", crc);
+
                         break;
                     }
                    case "SUBMODULE_RAW_BYTE": {
@@ -352,6 +360,10 @@ wss.on('connection', (ws) => {
 
                         /** write changes to the bus */
                         dispatchSubmoduleRawByte(nodeId, subModIdx);
+
+                        /** Recalc + persist intended CRC */
+                        const crc = updateCalculatedCRC(nodeId);
+                        updateParentNodeField(nodeId, "configCrc", crc);
 
                         break;
                     }
@@ -517,6 +529,97 @@ const NODE_FIELD_MAP = {
 
 /* === Functions === */
 
+// --- CRC16-CCITT (same as Python + ESP32) ---
+function crc16_ccitt(buf, initial = 0xFFFF) {
+    let crc = initial;
+    for (let i = 0; i < buf.length; i++) {
+        crc ^= (buf[i] << 8);
+        for (let b = 0; b < 8; b++) {
+            if (crc & 0x8000) {
+                crc = ((crc << 1) ^ 0x1021) & 0xFFFF;
+            } else {
+                crc = (crc << 1) & 0xFFFF;
+            }
+        }
+    }
+    return crc;
+}
+
+function serializeNodeInfo(nodeObj) {
+    const NODEINFO_STRUCT_SIZE = 136;
+    const SUBMODULE_STRUCT_SIZE = 16;
+
+    const buf = new Uint8Array(NODEINFO_STRUCT_SIZE);
+
+    const subModCnt = Math.min(nodeObj.subModCnt || 0, 8);
+
+    for (let i = 0; i < subModCnt; i++) {
+        const sm = nodeObj.subModule?.[i];
+        const offset = i * SUBMODULE_STRUCT_SIZE;
+
+        if (!sm) continue;
+
+        // rawConfig[0..2]
+        buf[offset + 0] = sm.rawConfig?.[0] ?? 0;
+        buf[offset + 1] = sm.rawConfig?.[1] ?? 0;
+        buf[offset + 2] = sm.rawConfig?.[2] ?? 0;
+
+        // bytes 3..8 = padding (leave zero)
+
+        // introMsgId (uint16 LE)
+        buf[offset + 9]  = sm.introMsgId & 0xFF;
+        buf[offset + 10] = (sm.introMsgId >> 8) & 0xFF;
+
+        // dataMsgId (uint16 LE)
+        buf[offset + 11] = sm.dataMsgId & 0xFF;
+        buf[offset + 12] = (sm.dataMsgId >> 8) & 0xFF;
+
+        // matches Python: byte 13 = 8
+        buf[offset + 13] = 8;
+
+        // dataMsgDlc
+        buf[offset + 14] = sm.dataMsgDlc ?? 0;
+
+        // saveState (boolean → 0/1)
+        buf[offset + 15] = sm.saveState ? 1 : 0;
+    }
+
+    // Parent node fields at fixed offsets
+    const idNum = parseInt(nodeObj.nodeId, 16) >>> 0;
+
+    buf[128] = idNum & 0xFF;
+    buf[129] = (idNum >> 8) & 0xFF;
+    buf[130] = (idNum >> 16) & 0xFF;
+    buf[131] = (idNum >> 24) & 0xFF;
+
+    buf[132] = nodeObj.nodeTypeMsg & 0xFF;
+    buf[133] = (nodeObj.nodeTypeMsg >> 8) & 0xFF;
+
+    buf[134] = 8; // matches Python
+
+    buf[135] = subModCnt;
+
+    return buf;
+}
+
+function updateCalculatedCRC(nodeId) {
+    const nodeObj = canDatabase[nodeId];
+    if (!nodeObj) {
+        console.log(`WARNING: No record for node ${nodeId}`); 
+        return;
+    }
+    const buf = serializeNodeInfo(nodeObj);
+    const crc = crc16_ccitt(buf);
+
+    if (!nodeObj.intended) nodeObj.intended = {};
+    nodeObj.intended.config_crc = crc;
+
+    console.log(`Calculated CRC16 for node ${nodeId}: 0x${crc.toString(16).toUpperCase().padStart(4, "0")} Reported CRC16: 0x${nodeObj.configCrc.toString(16).toUpperCase().padStart(4, "0")}`);
+    return crc;
+}
+
+
+
 /**
  * Broadcasts the current in-memory CAN database to all connected clients.
  * This is used to refresh the UI when a node is added, updated, or reset.
@@ -677,11 +780,7 @@ function updateParentNodeField(nodeId, fieldId, value) {
     if (!node.intended) node.intended = {};
     node.intended[column] = value;
 
-    db.prepare(`
-        UPDATE node_intended
-        SET ${column} = ?
-        WHERE node_id = ?
-    `).run(value, nodeId);
+    console.log(`Updated parent node ${nodeId} fieldId ${fieldId} column ${column} value ${value}`);
 
     db.prepare(`
         UPDATE node_intended
@@ -879,6 +978,9 @@ function compareParentNode(nodeId) {
 
     const nodeTypeMatch    = node.nodeTypeMsg === intended.node_type_msg;
     const configCrcMatch   = node.configCrc   === intended.config_crc;
+
+    /** log the reported crc and intended crc */
+    console.log(`node ${nodeId} crc: ${node.configCrc} intended crc: ${intended.config_crc}`);
 
     node.parentComparison = {
         nodeTypeMatch,
@@ -1133,7 +1235,7 @@ function loadMetadata() {
         metadataCache.personalityFields.get(row.personality_id)[row.field_index] = row.field_id;
     }
 
-    const personalitySize = Object.keys(metadataCache.personalityFields).length;
+    const personalitySize = metadataCache.personalityFields.size;
     console.log("Personality fields:", personalitySize);
 
     // Load personality names
@@ -1302,8 +1404,6 @@ function updateNodeDatabase(msg) {
 
         /** Check if the number of sub-modules indexed matches the number of advertised submodules */
         if (myNode.lastSubModIdx >= (myNode.subModCnt - 1)) { /* sub module count is 0-indexed */
-            /** Mark this interview as complete */
-            myNode.introComplete = true;
 
             /** Check for missing submodules */
             detectMissingSubmodules(nodeString, myNode, db);
@@ -1335,6 +1435,9 @@ function updateNodeDatabase(msg) {
                 parentInSync
             );
 
+            /** Perform CRC16 on this node, if not already done */
+            if (!myNode.introComplete) updateCalculatedCRC(nodeString);
+
             /** Sync the in-memory state to SQLite */
             syncNodeToDatabase(nodeString, myNode);
 
@@ -1343,9 +1446,11 @@ function updateNodeDatabase(msg) {
 
             seedNodeIntendedTable();
 
+            /** Mark this interview as complete */
+            myNode.introComplete = true;
             // console.log("Node:", nodeString, "interview complete, not sending ack");
         } else {
-            console.log("Node:", nodeString, "Sub-module count:", myNode.subModCnt, "CRC: ", myNode.configCrc);
+            console.log("Node:", nodeString, "Sub-module count:", myNode.subModCnt, `CRC: 0x${myNode.configCrc.toString(16).toUpperCase().padStart(4, "0")}` );
             /** Acknowledge the intro message */
             sendAckMsg(msg); 
         }
