@@ -400,6 +400,22 @@ wss.on('connection', (ws) => {
                         broadcastAuditLog(); /**< Refresh all clients with the new comment */
                         break;
 
+                    case 'SAVE_TO_BUS': {
+                        const nodeId = request.nodeId;
+                        const canMsg = request.canMsg; // "CFG_WRITE_NVS"
+
+                        console.log(`Persist request received for node ${nodeId}`);
+
+                        // Convert nodeId string → byte array (your existing helper)
+                        const targetNodeId = hexStringToByteArray(nodeId);
+
+                        // Construct and send the CAN message (your existing helper)
+                        writeCanMessageBE(CAN_MSG.CFG_WRITE_NVS_ID, targetNodeId);
+
+                        console.log(`Sent CFG_WRITE_NVS (0x436) to node ${nodeId}`);
+                        break;
+                    }
+
                     case 'GET_DEFINITIONS':
                         ws.send(JSON.stringify({
                             type: 'DEFINITIONS_LIST',
@@ -858,7 +874,7 @@ function writeCanMessageBE(id, dataArray) {
     const buffer = Buffer.alloc(CAN_STD_DLC); // Standard CAN frame size is 8 bytes
 
     dataArray.forEach((value, index) => {
-        if (index < CAN_STD_DLC) {
+        if (index < CAN_STD_DLC) { /* Make sure we don't write more than the standard 8 bytes */
             buffer.writeUInt8(value, index);
         }
     });
