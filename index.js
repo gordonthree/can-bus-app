@@ -866,15 +866,27 @@ function getTimestampPayload() {
 }
 
 /**
- * Modular function to write CAN messages with Big Endian data packing
+ * Modular function to write CAN messages with Big Endian data packing.
+ * Accepts either a flat array of bytes or nested arrays of bytes.
  * @param {number} id - The CAN arbitration ID
- * @param {Array} dataArray - Array of numbers to be packed
+ * @param {Array|number} data - Raw data to be packed into the CAN frame
  */
-function writeCanMessageBE(id, dataArray) {
+function writeCanMessageBE(id, data) {
     const buffer = Buffer.alloc(CAN_STD_DLC); // Standard CAN frame size is 8 bytes
 
+    // Normalize input into a flat array of bytes
+    let dataArray = [];
+
+    if (Array.isArray(data)) {
+        // Flatten nested arrays: [1,2,[3,4]] → [1,2,3,4]
+        dataArray = data.flat(Infinity);
+    } else if (typeof data === 'number') {
+        dataArray = [data];
+    }
+
+    // Write bytes into the CAN frame
     dataArray.forEach((value, index) => {
-        if (index < CAN_STD_DLC) { /* Make sure we don't write more than the standard 8 bytes */
+        if (index < CAN_STD_DLC) {
             buffer.writeUInt8(value, index);
         }
     });
