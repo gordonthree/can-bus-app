@@ -316,29 +316,11 @@ wss.on('connection', (ws) => {
 
                         console.log(`updating parent node ${nodeId} field ${fieldId} to ${value}`);
 
-                        const column = NODE_FIELD_MAP[fieldId];
-                        if (!column) {
-                            console.warn("Unknown parent node field:", fieldId);
-                            break;
-                        }
+                        /** Update in-memory and sql database */
+                        updateParentNodeField(nodeId, fieldId, value);
 
-                        // Update in-memory intended state
-                        if (!node.intended) node.intended = {};
-                        node.intended[column] = value;
-
-                        // Update SQLite
-                        db.prepare(`
-                            UPDATE node_intended
-                            SET ${column} = ?
-                            WHERE node_id = ?
-                        `).run(value, nodeId);
-
-                        db.prepare(`
-                            UPDATE node_intended
-                            SET ${column} = ?, 
-                            updated_at = ?
-                            WHERE node_id = ?
-                        `).run(value, Date.now(), nodeId);
+                        /** write changes to the bus */
+                        dispatchParentNodeField(nodeId, fieldId, value);
 
                         break;
                     }
@@ -350,22 +332,11 @@ wss.on('connection', (ws) => {
 
                         console.log(`updating node ${nodeId} submodule ${subModIdx} field ${fieldId} to ${value}`);
 
-                        const column = FIELD_MAP[fieldId];
-                        if (!column) {
-                            console.warn("Unknown fieldId:", fieldId);
-                            break;
-                        }
+                        /** update in-memory and sql database */
+                        updateSubmoduleField(nodeId, subModIdx, fieldId, value);
 
-                        const normalizedValue =
-                            column === "save_state" ? Number(value) : value;
-
-                        sub.intended[column] = normalizedValue;
-
-                        db.prepare(`
-                            UPDATE node_submodules
-                            SET ${column} = ?
-                            WHERE node_id = ? AND sub_index = ?
-                        `).run(normalizedValue, nodeId, subModIdx);
+                        /** write changes to the bus */
+                        dispatchSubmoduleField(nodeId, subModIdx, fieldId, value);
 
                         break;
                     }
@@ -376,15 +347,11 @@ wss.on('connection', (ws) => {
 
                         const column = `config_byte${byteIndex}`;
 
-                        // Update in-memory intended state
-                        sub.intended[column] = value;
+                        /** update in-memory and sql database */
+                        updateSubmoduleRawByte(nodeId, subModIdx, byteIndex, value);
 
-                        // Update SQLite
-                        db.prepare(`
-                            UPDATE node_submodules
-                            SET ${column} = ?
-                            WHERE node_id = ? AND sub_index = ?
-                        `).run(value, nodeId, subModIdx);
+                        /** write changes to the bus */
+                        dispatchSubmoduleRawByte(nodeId, subModIdx);
 
                         break;
                     }
@@ -469,7 +436,7 @@ wss.on('connection', (ws) => {
         } catch (err) {
             console.error('Failed to parse WebSocket message:', err);
         }
-    });
+    }); /* end ws.on('message') */
 });
 
 wss.on('close', () => clearInterval(interval));
@@ -540,7 +507,6 @@ const FIELD_MAP = {
 
 const NODE_FIELD_MAP = {
     nodeTypeMsg: "node_type_msg",
-    subModCnt:   "submod_count",
     configCrc:   "config_crc"
 };
 
@@ -677,8 +643,8 @@ function seedSubModules(nodeString, myNode) {
 function seedNodeIntendedTable() {
     const insert = db.prepare(`
         INSERT OR IGNORE INTO node_intended
-            (node_id, node_type_msg, submod_count, config_crc, updated_at)
-        VALUES (?, ?, ?, ?, ?)
+            (node_id, node_type_msg, config_crc, updated_at)
+        VALUES (?, ?, ?, ?)
     `);
 
     const now = Date.now();
@@ -689,12 +655,152 @@ function seedNodeIntendedTable() {
         insert.run(
             nodeId,
             node.nodeTypeMsg ?? 0,
-            node.subModCnt ?? 0,
             node.configCrc ?? 0,   // or 0 if you don't have CRC yet
             now
         );
     }
 }
+
+function updateParentNodeField(nodeId, fieldId, value) {
+    const node = canDatabase[nodeId];
+
+    const column = NODE_FIELD_MAP[fieldId];
+    if (!column) {
+        console.warn("Unknown parent node field:", fieldId);
+        return;
+    }
+
+    if (!node.intended) node.intended = {};
+    node.intended[column] = value;
+
+    db.prepare(`
+        UPDATE node_intended
+        SET ${column} = ?
+        WHERE node_id = ?
+    `).run(value, nodeId);
+
+    db.prepare(`
+        UPDATE node_intended
+        SET ${column} = ?, 
+        updated_at = ?
+        WHERE node_id = ?
+    `).run(value, Date.now(), nodeId);
+}
+
+
+function dispatchParentNodeField(nodeId, fieldId, value) {
+    const node = canDatabase[nodeId];
+    const nodeIdBytes = hexStringToByteArray(nodeId);
+
+    if (fieldId === "nodeTypeMsg") {
+        const introMsgId_hi = (value >> SHIFT_BYTE) & BYTE_MASK;
+        const introMsgId_lo = value & BYTE_MASK;
+
+        writeCanMessageBE(
+            CAN_MSG.CFG_NODE_INTRO_MSG_ID,
+            [
+                nodeIdBytes,
+                introMsgId_hi,
+                introMsgId_lo,
+                DEFAULT_DLC
+            ]
+        );
+    }
+
+    if (fieldId === "subModCnt") {
+        // Nothing to dispatch to the bus for submodule count.
+    }
+}
+
+function updateSubmoduleField(nodeId, subModIdx, fieldId, value) {
+    const sub = canDatabase[nodeId].subModule[subModIdx];
+
+    const column = FIELD_MAP[fieldId];
+    if (!column) {
+        console.warn("Unknown fieldId:", fieldId);
+        return;
+    }
+
+    const normalizedValue =
+        column === "save_state" ? Number(value) : value;
+
+    sub.intended[column] = normalizedValue;
+
+    db.prepare(`
+        UPDATE node_submodules
+        SET ${column} = ?
+        WHERE node_id = ? AND sub_index = ?
+    `).run(normalizedValue, nodeId, subModIdx);
+}
+
+
+function dispatchSubmoduleField(nodeId, subModIdx, fieldId, value) {
+    const sub = canDatabase[nodeId].subModule[subModIdx];
+    const nodeIdBytes = hexStringToByteArray(nodeId);
+
+    if (fieldId === "introMsgId") {
+        const introMsgId_hi = (value >> SHIFT_BYTE) & BYTE_MASK;
+        const introMsgId_lo = value & BYTE_MASK;
+
+        writeCanMessageBE(
+            CAN_MSG.CFG_SUB_INTRO_MSG_ID,
+            [
+                nodeIdBytes,
+                subModIdx,
+                introMsgId_hi,
+                introMsgId_lo,
+                sub.intended.intro_msg_dlc
+            ]
+        );
+    }
+
+    if (fieldId === "dataMsgId") {
+        const dataMsgId_hi = (value >> SHIFT_BYTE) & BYTE_MASK;
+        const dataMsgId_lo = value & BYTE_MASK;
+
+        writeCanMessageBE(
+            CAN_MSG.CFG_SUB_DATA_MSG_ID,
+            [
+                nodeIdBytes,
+                subModIdx,
+                dataMsgId_hi,
+                dataMsgId_lo,
+                sub.intended.data_msg_dlc
+            ]
+        );
+    }
+}
+
+function updateSubmoduleRawByte(nodeId, subModIdx, byteIndex, value) {
+    const sub = canDatabase[nodeId].subModule[subModIdx];
+
+    const column = `config_byte${byteIndex}`;
+
+    sub.intended[column] = value;
+
+    db.prepare(`
+        UPDATE node_submodules
+        SET ${column} = ?
+        WHERE node_id = ? AND sub_index = ?
+    `).run(value, nodeId, subModIdx);
+}
+
+function dispatchSubmoduleRawByte(nodeId, subModIdx) {
+    const sub = canDatabase[nodeId].subModule[subModIdx];
+    const nodeIdBytes = hexStringToByteArray(nodeId);
+
+    writeCanMessageBE(
+        CAN_MSG.CFG_SUB_RAW_DATA_ID,
+        [
+            nodeIdBytes,
+            subModIdx,
+            sub.intended.config_byte0,
+            sub.intended.config_byte1,
+            sub.intended.config_byte2
+        ]
+    );
+}
+
 
 
 /**
@@ -753,7 +859,7 @@ function compareParentNode(nodeId) {
     const node = canDatabase[nodeId];
 
     const intended = db.prepare(`
-        SELECT node_type_msg, submod_count, config_crc
+        SELECT node_type_msg,config_crc
         FROM node_intended
         WHERE node_id = ?
     `).get(nodeId);
@@ -762,24 +868,21 @@ function compareParentNode(nodeId) {
         node.parentComparison = {
             isInSync: false,
             nodeTypeMatch: false,
-            subModCountMatch: false,
             configCrcMatch: false
         };
         return;
     }
 
     const nodeTypeMatch    = node.nodeTypeMsg === intended.node_type_msg;
-    const subModCountMatch = node.subModCnt   === intended.submod_count;
     const configCrcMatch   = node.configCrc   === intended.config_crc;
 
     node.parentComparison = {
         nodeTypeMatch,
-        subModCountMatch,
         configCrcMatch,
-        isInSync: nodeTypeMatch && subModCountMatch && configCrcMatch
+        isInSync: nodeTypeMatch && configCrcMatch
     };
 
-    return nodeTypeMatch && subModCountMatch && configCrcMatch;
+    return nodeTypeMatch && configCrcMatch;
 }
 
 
@@ -872,19 +975,26 @@ function getTimestampPayload() {
  * @param {Array|number} data - Raw data to be packed into the CAN frame
  */
 function writeCanMessageBE(id, data) {
-    const buffer = Buffer.alloc(CAN_STD_DLC); // Standard CAN frame size is 8 bytes
+    const buffer = Buffer.alloc(CAN_STD_DLC);
 
-    // Normalize input into a flat array of bytes
     let dataArray = [];
 
     if (Array.isArray(data)) {
-        // Flatten nested arrays: [1,2,[3,4]] → [1,2,3,4]
-        dataArray = data.flat(Infinity);
+        data.forEach(item => {
+            if (Array.isArray(item)) {
+                dataArray.push(...item);
+            } else if (item instanceof Uint8Array) {
+                dataArray.push(...item);
+            } else {
+                dataArray.push(item);
+            }
+        });
+    } else if (data instanceof Uint8Array) {
+        dataArray = [...data];
     } else if (typeof data === 'number') {
         dataArray = [data];
     }
 
-    // Write bytes into the CAN frame
     dataArray.forEach((value, index) => {
         if (index < CAN_STD_DLC) {
             buffer.writeUInt8(value, index);
@@ -1144,8 +1254,7 @@ function updateNodeDatabase(msg) {
             /** create new node in the in-memory database */
             canDatabase[nodeString] = { 
                                         subModule:     {}, /* empty sub-module array */
-                                        lastSubModIdx: 0,   /* start with index 0 */
-                                        subModCountMatch: null
+                                        lastSubModIdx: 0   /* start with index 0 */
                                       };
         }
         
@@ -1209,19 +1318,6 @@ function updateNodeDatabase(msg) {
                 WHERE node_id = ?
             `).get(nodeString);
 
-            /** read how many submodules are intended, 
-             * how many are programmed into the db for this node */
-            myNode.intendedSubModCnt = intendedRows.cnt;
-
-            /**  compare the reported sub-module count with the intended */
-            const reportedMatchesIntended = (myNode.subModCnt === myNode.intendedSubModCnt);
-
-            /**  compare the bus sub-module count with the intended */
-            const busMatchesIntended = (busSubModCount === myNode.intendedSubModCnt);
-
-            /** if both checks are true, set the flag */
-            myNode.subModCountMatch = reportedMatchesIntended && busMatchesIntended
-
             /** Check if all submodules are in sync */
             const subsInSync = Object.values(myNode.subModule)
                 .every(sub => sub.isInSync === true);
@@ -1231,7 +1327,6 @@ function updateNodeDatabase(msg) {
             
             /** Set a flag for the entire node being "in sync" if all sub-modules are in sync */
             myNode.isInSync = (
-                myNode.subModCountMatch &&
                 subsInSync &&
                 parentInSync
             );
