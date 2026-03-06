@@ -60,6 +60,9 @@ const CAN_FIRST_MSG = 0x100;
 /** Last CAN Arbitration ID used in this project */
 const CAN_LAST_MSG = 0x7FF;
 
+/** First CAN data message used in this project */
+const CAN_FIRST_DATA_MSG = 0x110;
+
 /** Four byte Node ID for the master */
 const myNodeId = [0x19, 0x00, 0x00, 0x19];
 
@@ -135,7 +138,16 @@ const MS_PER_SECOND = 1000;
 /** Bit shift for byte operations */
 const SHIFT_BYTE = 8;
 
-/** Mask for byte operations */
+/** Bit shift for byte operations 0x08 */
+const BYTE_SHIFT = 0x08;
+
+/** Bit shift for byte operations 0x10 16-bits*/
+const WORD_SHIFT = 0x10;
+
+/** Bit shift for byte operations 0x18 24-bits*/
+const INT24_SHIFT = 0x18;
+
+/** Mask for byte operations 0xFF */
 const BYTE_MASK = 0xFF;
 
 /** Mask for the lower 4 bits to extract DLC */
@@ -155,11 +167,18 @@ const sendTsInterval = 10000;
 /** Create In-memory database for CAN messages */
 const canDatabase = {};
 
+/** Sub-module should power-on to the default state */
+const SAVE_STATE_FALSE = false;
+/** Sub-module should power-on to the last known state */
+const SAVE_STATE_TRUE  = true;
+
 /** Timestamp of last "request intro" message */
 let lastReqIntro = 0;
 
 /** Timestamp of last "timestamp" message */
 let lastTsMsg = 0;
+
+
 
 /** SQLite database for tracking CAN modules and messages */
 const db = new Database('can_management.db');
@@ -381,23 +400,47 @@ wss.on('connection', (ws) => {
 
                     case 'SAVE_TO_BUS': {
                         const nodeId = request.nodeId;
-                        const canMsg = request.canMsg; // "CFG_WRITE_NVS"
 
                         console.log(`Persist request received for node ${nodeId}`);
 
-                        // Convert nodeId string → byte array (your existing helper)
-                        const targetNodeId = hexStringToByteArray(nodeId);
+                        const nodeObj = canDatabase[nodeId];
+                        if (!nodeObj || !nodeObj.intended || typeof nodeObj.intended.config_crc !== "number") {
+                            console.warn(`Cannot persist node ${nodeId}: intended CRC missing`);
+                            break;
+                        }
 
-                        // Construct and send the CAN message (your existing helper)
-                        /** send persist changes command */
-                        writeCanMessageBE(CAN_MSG.CFG_WRITE_NVS_ID, targetNodeId);
-                        /** send reboot command */
-                        writeCanMessageBE(CAN_MSG.CFG_REBOOT_ID, targetNodeId);
+                        const crc = nodeObj.intended.config_crc;
 
+                        // Convert nodeId string → byte array (big-endian)
+                        const nodeIdBytes = hexStringToByteArray(nodeId);
 
-                        console.log(`Sent CFG_WRITE_NVS (0x436) to node ${nodeId}`);
+                        // Split CRC into big-endian bytes
+                        const crc_hi = (crc >> 8) & 0xFF;
+                        const crc_lo = crc & 0xFF;
+
+                        // Send persist command with CRC
+                        writeCanMessageBE(
+                            CAN_MSG.CFG_WRITE_NVS_ID,
+                            [
+                                nodeIdBytes,   // 4 bytes
+                                crc_hi,        // big-endian CRC
+                                crc_lo
+                            ]
+                        );
+
+                        // Send reboot command (unchanged)
+                        writeCanMessageBE(
+                            CAN_MSG.CFG_REBOOT_ID,
+                            nodeIdBytes
+                        );
+
+                        console.log(
+                            `Sent CFG_WRITE_NVS (0x436) with CRC 0x${crc.toString(16).padStart(4, "0")} to node ${nodeId}`
+                        );
+
                         break;
                     }
+
 
                     case 'GET_DEFINITIONS':
                         ws.send(JSON.stringify({
@@ -516,6 +559,7 @@ const insertHistorySnapshot = db.prepare(`
 /** Field mappings between the UI and the database */
 const FIELD_MAP = {
     introMsgId:  "personality_id",
+    introMsgDlc: "intro_msg_dlc",
     dataMsgId:   "data_msg_id",
     dataMsgDlc:  "data_msg_dlc",
     saveState:   "save_state"
@@ -523,7 +567,9 @@ const FIELD_MAP = {
 
 const NODE_FIELD_MAP = {
     nodeTypeMsg: "node_type_msg",
-    configCrc:   "config_crc"
+    nodeTypeDlc: "node_type_dlc",
+    configCrc:   "config_crc",
+    subModCnt:   "submod_count"
 };
 
 
@@ -545,62 +591,103 @@ function crc16_ccitt(buf, initial = 0xFFFF) {
     return crc;
 }
 
+/**
+ * Serialize a nodeInfo_t struct into a 136‑byte Uint8Array.
+ * This must match the ESP32 firmware layout exactly:
+ *
+ * struct __attribute__((packed)) nodeInfo_t {
+ *     subModule_t subModule[8];   // 8 × 16 bytes = 128 bytes
+ *     uint32_t nodeID;            // 4 bytes  (offset 128)
+ *     uint16_t nodeTypeMsg;       // 2 bytes  (offset 132)
+ *     uint8_t  nodeTypeDLC;       // 1 byte   (offset 134)
+ *     uint8_t  subModCnt;         // 1 byte   (offset 135)
+ * };
+ *
+ * subModule_t layout (16 bytes each):
+ *   0  rawConfig[0]
+ *   1  rawConfig[1]
+ *   2  rawConfig[2]
+ *   3–8  padding (6 bytes)
+ *   9–10   introMsgId   (uint16 LE)
+ *   11–12  dataMsgId    (uint16 LE)
+ *   13     introMsgDlc
+ *   14     dataMsgDlc
+ *   15     saveState (0/1)
+ */
 function serializeNodeInfo(nodeObj) {
-    const NODEINFO_STRUCT_SIZE = 136;
-    const SUBMODULE_STRUCT_SIZE = 16;
+    // ---- Struct sizes ----
+    const NODEINFO_STRUCT_SIZE   = 136;
+    const SUBMODULE_STRUCT_SIZE  = 16;
+    const MAX_SUBMODULES         = 8;
+
+    // ---- Parent-node field offsets ----
+    const OFFSET_NODE_ID         = 128; // uint32_t
+    const OFFSET_NODE_TYPE_MSG   = 132; // uint16_t
+    const OFFSET_NODE_TYPE_DLC   = 134; // uint8_t
+    const OFFSET_SUBMOD_COUNT    = 135; // uint8_t
+
+    // ---- Submodule field offsets (relative to each submodule block) ----
+    const SM_OFFSET_RAW0         = 0;
+    const SM_OFFSET_RAW1         = 1;
+    const SM_OFFSET_RAW2         = 2;
+    // bytes 3–8 are padding
+    const SM_OFFSET_INTRO_ID     = 9;   // uint16 LE
+    const SM_OFFSET_DATA_ID      = 11;  // uint16 LE
+    const SM_OFFSET_INTRO_DLC    = 13;  // uint8_t
+    const SM_OFFSET_DATA_DLC     = 14;  // uint8_t
+    const SM_OFFSET_SAVE_STATE   = 15;  // uint8_t
 
     const buf = new Uint8Array(NODEINFO_STRUCT_SIZE);
 
-    const subModCnt = Math.min(nodeObj.subModCnt || 0, 8);
+    // Clamp submodule count to valid range
+    const subModCnt = Math.min(nodeObj.subModCnt || 0, MAX_SUBMODULES);
 
+    // ---- Serialize submodules ----
     for (let i = 0; i < subModCnt; i++) {
         const sm = nodeObj.subModule?.[i];
-        const offset = i * SUBMODULE_STRUCT_SIZE;
-
         if (!sm) continue;
 
-        // rawConfig[0..2]
-        buf[offset + 0] = sm.rawConfig?.[0] ?? 0;
-        buf[offset + 1] = sm.rawConfig?.[1] ?? 0;
-        buf[offset + 2] = sm.rawConfig?.[2] ?? 0;
+        const base = i * SUBMODULE_STRUCT_SIZE;
 
-        // bytes 3..8 = padding (leave zero)
+        buf[base + SM_OFFSET_RAW0]         = sm.rawConfig?.[0] ?? 0;
+        buf[base + SM_OFFSET_RAW1]         = sm.rawConfig?.[1] ?? 0;
+        buf[base + SM_OFFSET_RAW2]         = sm.rawConfig?.[2] ?? 0;
 
         // introMsgId (uint16 LE)
-        buf[offset + 9]  = sm.introMsgId & 0xFF;
-        buf[offset + 10] = (sm.introMsgId >> 8) & 0xFF;
+        buf[base + SM_OFFSET_INTRO_ID]     = sm.introMsgId & BYTE_MASK;
+        buf[base + SM_OFFSET_INTRO_ID + 1] = (sm.introMsgId >> BYTE_SHIFT) & BYTE_MASK;
 
         // dataMsgId (uint16 LE)
-        buf[offset + 11] = sm.dataMsgId & 0xFF;
-        buf[offset + 12] = (sm.dataMsgId >> 8) & 0xFF;
+        buf[base + SM_OFFSET_DATA_ID]      = sm.dataMsgId & BYTE_MASK;
+        buf[base + SM_OFFSET_DATA_ID + 1]  = (sm.dataMsgId >> BYTE_SHIFT) & BYTE_MASK;
 
-        // matches Python: byte 13 = 8
-        buf[offset + 13] = 8;
-
-        // dataMsgDlc
-        buf[offset + 14] = sm.dataMsgDlc ?? 0;
-
-        // saveState (boolean → 0/1)
-        buf[offset + 15] = sm.saveState ? 1 : 0;
+        buf[base + SM_OFFSET_INTRO_DLC]    = sm.introMsgDlc ?? 0;
+        buf[base + SM_OFFSET_DATA_DLC]     = sm.dataMsgDlc  ?? 0;
+        buf[base + SM_OFFSET_SAVE_STATE]   = sm.saveState ? 1 : 0;
     }
 
-    // Parent node fields at fixed offsets
-    const idNum = parseInt(nodeObj.nodeId, 16) >>> 0;
+    // ---- Serialize parent-node fields ----
 
-    buf[128] = idNum & 0xFF;
-    buf[129] = (idNum >> 8) & 0xFF;
-    buf[130] = (idNum >> 16) & 0xFF;
-    buf[131] = (idNum >> 24) & 0xFF;
+    // nodeID (uint32 LE)
+    const idNum = parseInt(nodeObj.nodeId, HEX_BASE) >>> 0;
+    buf[OFFSET_NODE_ID + 0] = idNum & BYTE_MASK;
+    buf[OFFSET_NODE_ID + 1] = (idNum >> BYTE_SHIFT)  & BYTE_MASK;
+    buf[OFFSET_NODE_ID + 2] = (idNum >> WORD_SHIFT)  & BYTE_MASK;
+    buf[OFFSET_NODE_ID + 3] = (idNum >> INT24_SHIFT) & BYTE_MASK;
 
-    buf[132] = nodeObj.nodeTypeMsg & 0xFF;
-    buf[133] = (nodeObj.nodeTypeMsg >> 8) & 0xFF;
+    // nodeTypeMsg (uint16 LE)
+    buf[OFFSET_NODE_TYPE_MSG + 0] = nodeObj.nodeTypeMsg & BYTE_MASK;
+    buf[OFFSET_NODE_TYPE_MSG + 1] = (nodeObj.nodeTypeMsg >> BYTE_SHIFT) & BYTE_MASK;
 
-    buf[134] = 8; // matches Python
+    // nodeTypeDLC
+    buf[OFFSET_NODE_TYPE_DLC] = nodeObj.nodeTypeDlc ?? 0;
 
-    buf[135] = subModCnt;
+    // subModCnt
+    buf[OFFSET_SUBMOD_COUNT] = subModCnt;
 
     return buf;
 }
+
 
 function updateCalculatedCRC(nodeId) {
     const nodeObj = canDatabase[nodeId];
@@ -715,43 +802,84 @@ function broadcastAuditLog() {
  * @return {void}
  */
 function seedSubModules(nodeString, myNode) {
-    /** Add sub-module data to submodules table */
+    /**
+     * Insert intended submodule state into SQLite.
+     * intro_msg_dlc is now included because it participates in the node’s CRC image
+     * and must be part of the authoritative intended configuration.
+     */
     const insertSubmoduleIntended = db.prepare(`
         INSERT OR IGNORE INTO node_submodules
-        (node_id, sub_index, personality_id,
+        (node_id, sub_index, personality_id, intro_msg_dlc,
         config_byte0, config_byte1, config_byte2,
-        data_msg_id, data_msg_dlc, save_state)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        data_msg_id, data_msg_dlc, save_state, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     
     for (const [subIdx, sub] of Object.entries(myNode.subModule)) {
         // console.log("Processing sub-module", subIdx, "\n", JSON.stringify(sub, null, 2));
 
-        /** make sure these fields are numbers */
-        const introMsgId = Number(sub.introMsgId ?? 0);
-        const dataMsgId  = Number(sub.dataMsgId  ?? 0);
-        const dataMsgDlc = Number(sub.dataMsgDlc ?? 0);
-        const saveState  = Number(sub.saveState  ?? 0);
+        /* Normalize all these fields as numbers */
+        const introMsgId  = Number(sub.introMsgId  ?? SUBMOD_INTRO_BEGIN); /* Default to first sub-module intro message */
+        const introMsgDlc = Number(sub.introMsgDlc ?? DEFAULT_DLC); /* CAN message spec of 8 bytes */
+        const dataMsgId   = Number(sub.dataMsgId   ?? CAN_FIRST_DATA_MSG); /* Default to first data message */
+        const dataMsgDlc  = Number(sub.dataMsgDlc  ?? DEFAULT_DLC); /* CAN message spec of 8 bytes */
+        const saveState   = Number(sub.saveState   ?? SAVE_STATE_FALSE);
 
+        /* introMsgId is the personality ID */
         insertSubmoduleIntended.run(
             nodeString,
             Number(subIdx),
             introMsgId,
+            introMsgDlc,
             sub.rawConfig[0],
             sub.rawConfig[1],
             sub.rawConfig[2],
             dataMsgId,
             dataMsgDlc,
-            saveState
+            saveState,
+            Date.now()
         );
     }    
+}
+
+function getIntendedNode(nodeId) {
+    /* Read the intended configuration for this node */
+    const row = db.prepare(`
+        SELECT node_type_msg, node_type_dlc, submod_count, config_crc
+        FROM node_intended
+        WHERE node_id = ?
+    `).get(nodeId);
+
+    if (!row) return; /* Abort if node not found */
+
+    /** overwrite any existing intended configuration */
+    canDatabase[nodeId].intended = {
+        node_type_msg: row.node_type_msg,
+        node_type_dlc: row.node_type_dlc,
+        submod_count:  row.submod_count,
+        config_crc:    row.config_crc
+    };
+
+    /** Read the first and last seen times for this node */
+    const history = db.prepare(`
+        SELECT first_seen, last_seen
+        FROM node_inventory
+        WHERE node_id = ?
+        LIMIT 1
+    `).get(nodeId);
+
+    /** only update specific fields */
+    if (history) {
+        canDatabase[nodeId].firstSeen = history.first_seen;
+        canDatabase[nodeId].lastSeen  = history.last_seen;
+    }
 }
 
 function seedNodeIntendedTable() {
     const insert = db.prepare(`
         INSERT OR IGNORE INTO node_intended
-            (node_id, node_type_msg, config_crc, updated_at)
-        VALUES (?, ?, ?, ?)
+            (node_id, node_type_msg, node_type_dlc, submod_count, config_crc, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
     `);
 
     const now = Date.now();
@@ -762,8 +890,10 @@ function seedNodeIntendedTable() {
         insert.run(
             nodeId,
             node.nodeTypeMsg ?? 0,
+            node.nodeTypeDlc ?? 0,
+            node.subModCnt ?? 0,
             node.configCrc ?? 0,   // or 0 if you don't have CRC yet
-            now
+            Date.now()
         );
     }
 }
@@ -914,7 +1044,7 @@ function dispatchSubmoduleRawByte(nodeId, subModIdx) {
  */
 function getIntendedSubmodule(nodeId, subIdx) {
     return db.prepare(`
-        SELECT personality_id,
+        SELECT personality_id, intro_msg_dlc,
                config_byte0, config_byte1, config_byte2,
                data_msg_id, data_msg_dlc, save_state
         FROM node_submodules
@@ -922,12 +1052,45 @@ function getIntendedSubmodule(nodeId, subIdx) {
     `).get(nodeId, subIdx);
 }
 
-
+/**
+ * Compare a reported submodule configuration (from a live ESP32 node) against
+ * the server's intended configuration (loaded from SQLite). Every field checked
+ * here corresponds directly to bytes used in the node’s CRC16 calculation, so
+ * any mismatch indicates the node’s internal config image differs from the
+ * authoritative intended state.
+ *
+ * The comparison covers:
+ * - personalityMatch: introMsgId reported by the node must equal the intended
+ *   personality_id. The firmware encodes personality_id as introMsgId.
+ *
+ * - introMsgDlcMatch: the node’s introMsgDlc must match the intended
+ *   intro_msg_dlc. This byte participates in the node’s CRC and must remain
+ *   consistent with the personality definition.
+ *
+ * - dataMsgIdMatch / dataMsgDlcMatch: message ID and DLC for the data message
+ *   must match the intended values. Both fields are included in the CRC image.
+ *
+ * - saveStateMatch: the node’s saveState flag must match the intended value.
+ *
+ * - byteMatches: rawConfig[0..2] must match the intended config_byte0..2. These
+ *   bytes represent the personality’s raw configuration fields and are part of
+ *   the CRC image.
+ *
+ * The returned object includes individual match flags plus a consolidated
+ * isInSync flag, which is true only when *all* fields match. This function is
+ * used by the UI and backend to determine whether a submodule is fully aligned
+ * with the intended configuration or requires updates or a commit.
+ *
+ * @param {Object} reported - Live submodule state reported by the ESP32 node.
+ * @param {Object} intended - Intended submodule state loaded from SQLite.
+ * @returns {Object} Detailed comparison results and an overall sync flag.
+ */
 function compareSubmodule(reported, intended) {
     if (!intended) {
         return {
             isInSync: false,
             personalityMatch: false,
+            introMsgDlcMatch: false,
             dataMsgIdMatch: false,
             dataMsgDlcMatch: false,
             saveStateMatch: false,
@@ -941,54 +1104,86 @@ function compareSubmodule(reported, intended) {
         reported.rawConfig[2] === intended.config_byte2
     ];
 
-    return {
-        personalityMatch: reported.introMsgId === intended.personality_id,
-        dataMsgIdMatch:   reported.dataMsgId   === intended.data_msg_id,
-        dataMsgDlcMatch:  reported.dataMsgDlc  === intended.data_msg_dlc,
-        saveStateMatch: Number(reported.saveState) === intended.save_state
-,
+    // introMsgId is the personality ID
+    const personalityMatch = reported.introMsgId        === intended.personality_id;
+    const introMsgDlcMatch = reported.introMsgDlc       === intended.intro_msg_dlc;
+    const dataMsgIdMatch   = reported.dataMsgId         === intended.data_msg_id;
+    const dataMsgDlcMatch  = reported.dataMsgDlc        === intended.data_msg_dlc;
+    const saveStateMatch   = Number(reported.saveState) === intended.save_state;
+
+    const isInSync = {
+        personalityMatch,
+        introMsgDlcMatch,
+        dataMsgIdMatch,
+        dataMsgDlcMatch,
+        saveStateMatch,
         byteMatches,
         isInSync:
-            reported.introMsgId === intended.personality_id &&
-            reported.dataMsgId   === intended.data_msg_id &&
-            reported.dataMsgDlc  === intended.data_msg_dlc &&
-            Number(reported.saveState) === intended.save_state &&
+            personalityMatch &&
+            introMsgDlcMatch &&
+            dataMsgIdMatch &&
+            dataMsgDlcMatch &&
+            saveStateMatch &&
             byteMatches.every(x => x === true)
-
     };
+
+    return isInSync;
 }
 
+/**
+ * Compare the reported parent‑node state against the authoritative intended
+ * parent‑node configuration stored in memory. This mirrors the submodule
+ * comparison logic and ensures that all fields participating in the nodeInfo_t
+ * CRC image are validated.
+ *
+ * Fields compared:
+ * - nodeTypeMsg: 16‑bit message ID defining the node’s personality/type.
+ * - nodeTypeDlc: DLC for the node type message (part of CRC image).
+ * - subModCnt:   Number of submodules the node reports (part of CRC image).
+ * - configCrc:   CRC16 of the full serialized nodeInfo_t struct.
+ *
+ * The function stores a detailed comparison result in
+ * canDatabase[nodeId].parentComparison and returns a boolean indicating whether
+ * the parent node is fully synchronized with the intended configuration.
+ *
+ * @param {string} nodeId - Hex string identifying the node.
+ * @return {boolean} True if all parent‑node fields match the intended state.
+ */
 function compareParentNode(nodeId) {
     const node = canDatabase[nodeId];
-
-    const intended = db.prepare(`
-        SELECT node_type_msg,config_crc
-        FROM node_intended
-        WHERE node_id = ?
-    `).get(nodeId);
+    const intended = node.intended;
 
     if (!intended) {
         node.parentComparison = {
             isInSync: false,
             nodeTypeMatch: false,
+            nodeTypeDlcMatch: false,
+            subModCntMatch: false,
             configCrcMatch: false
         };
-        return;
+        return false;
     }
 
-    const nodeTypeMatch    = node.nodeTypeMsg === intended.node_type_msg;
-    const configCrcMatch   = node.configCrc   === intended.config_crc;
+    const nodeTypeMatch     = node.nodeTypeMsg === intended.node_type_msg;
+    const nodeTypeDlcMatch  = node.nodeTypeDlc === intended.node_type_dlc;
+    const subModCntMatch    = node.subModCnt   === intended.submod_count;
+    const configCrcMatch    = node.configCrc   === intended.config_crc;
 
-    /** log the reported crc and intended crc */
-    console.log(`node ${nodeId} crc: ${node.configCrc} intended crc: ${intended.config_crc}`);
+    const isInSync =
+        nodeTypeMatch &&
+        nodeTypeDlcMatch &&
+        subModCntMatch &&
+        configCrcMatch;
 
     node.parentComparison = {
         nodeTypeMatch,
+        nodeTypeDlcMatch,
+        subModCntMatch,
         configCrcMatch,
-        isInSync: nodeTypeMatch && configCrcMatch
+        isInSync
     };
 
-    return nodeTypeMatch && configCrcMatch;
+    return isInSync;
 }
 
 
@@ -1028,18 +1223,15 @@ function syncNodeToDatabase(nodeId, nodeData) {
 
 }
 
-/**
- * Logs a manual configuration change.
- */
-function logManualChange(nodeId, subIdx, field, oldVal, newVal) {
-    insertAudit.run(
-        nodeId, 
-        subIdx, 
-        field, 
-        JSON.stringify(oldVal), 
-        JSON.stringify(newVal)
-    );
+
+function insertAuditLog(nodeId, subModIdx = null, field, oldValue = null, newValue = null) {
+    db.prepare(`
+        INSERT INTO audit_log 
+        (node_id, submod_idx, field_name, old_value, new_value)
+        VALUES (?, ?, ?, ?, ?)
+    `).run(nodeId, subModIdx, field, oldValue, newValue);
 }
+
 
 /**
  * Retrieves the history of a specific sub-module.
@@ -1101,14 +1293,40 @@ function writeCanMessageBE(id, data) {
         dataArray = [data];
     }
 
+    let dlc = 0;
     dataArray.forEach((value, index) => {
         if (index < CAN_STD_DLC) {
             buffer.writeUInt8(value, index);
+            dlc++;
         }
     });
 
     channel.send({ id: id, data: buffer });
+    logTxFrame(id, dlc, dataArray);
 }
+
+/* === CAN LOGGING FUNCTIONS === */
+function shouldLogRx(canId, dlc, data) {
+    // Placeholder: log everything for now
+    return true;
+}
+
+function logCanFrame(direction, canId, dlc, data, iface = 'can0') {
+    db.prepare(`
+        INSERT INTO can_traffic (direction, can_id, dlc, data, interface)
+        VALUES (?, ?, ?, ?, ?)
+    `).run(direction, canId, dlc, data, iface);
+}
+
+function logTxFrame(canId, dlc, data) {
+    logCanFrame('tx', canId, dlc, Buffer.from(data));
+}
+
+function logRxFrame(canId, dlc, data) {
+    if (!shouldLogRx(canId, dlc, data)) return;
+    logCanFrame('rx', canId, dlc, Buffer.from(data));
+}
+
 
 function getNodeId(msg) {
     if (msg.data.length < NODE_ID_BYTE_LENGTH) {
@@ -1136,9 +1354,9 @@ function sendRequestIntro() {
 function saveDatabaseToFile() {
     fs.writeFile('./can-node-database.json', JSON.stringify(canDatabase, null, 4), (err) => {
         if (err) {
-            console.error('Failed to save database to disk:', err);
+            console.error('Failed to save canDatabase to disk:', err);
         } else {
-            console.log('Database successfully persisted to disk.');
+            console.log('Object canDatabase successfully persisted to disk.');
         }
     });
 }
@@ -1303,7 +1521,9 @@ function detectMissingSubmodules(nodeString, myNode) {
     const reportedCount = myNode.subModCnt;                 // From intro message
     const busCount = Object.keys(myNode.subModule).length;  // From interview
 
-    // For each submodule index the node claims to have
+    // 15‑minute hysteresis window (in milliseconds)
+    const SOFT_MISSING_WINDOW = 15 * 60 * 1000;
+
     for (let i = 0; i < reportedCount; i++) {
         const existsOnBus = !!myNode.subModule[i];
 
@@ -1314,24 +1534,24 @@ function detectMissingSubmodules(nodeString, myNode) {
                 subModIdx: i,
                 isMissingHard: true,
                 isMissingSoft: false,
-                isUnconfigured: false,
-                isInSync: false
+                isUnconfigured: false
             };
         } else {
-            // SOFT MISSING: Submodule existed before, but didn't respond this cycle
-            // Only mark soft-missing if this submodule was seen in a previous cycle
             const sub = myNode.subModule[i];
 
-            if (sub.lastSeen && (Date.now() - sub.lastSeen) > 0) {
+            // Only mark soft‑missing if the submodule was seen before,
+            // AND the time since lastSeen exceeds the hysteresis window.
+            if (sub.lastSeen && (Date.now() - sub.lastSeen) > SOFT_MISSING_WINDOW) {
                 sub.isMissingHard = false;
                 sub.isMissingSoft = true;
-                sub.isInSync = false;
+            } else {
+                // Within the window → definitely not missing
+                sub.isMissingHard = false;
+                sub.isMissingSoft = false;
             }
         }
     }
 }
-
-
 
 /**
  * Store and organize network modules by Node Type (identifer 0x780-0x7FF)
@@ -1364,18 +1584,29 @@ function updateNodeDatabase(msg) {
                                       };
         }
         
+        
         /** create a reference to the node */
         const myNode = canDatabase[nodeString];
 
+        /** Attempt to load intended configuration from the database */
+        getIntendedNode(nodeString);
+
+        /** Ensure subModule exists even if node was loaded from disk */
+        if (!myNode.subModule) {
+            myNode.subModule = {};
+        }
+
         /** Reset missing sub-module flags */
-        for (const sub of Object.values(myNode.subModule)) {
-            sub.isMissingHard = false;
-            sub.isMissingSoft = false;
+        if (myNode.subModule) {
+            for (const sub of Object.values(myNode.subModule)) {
+                sub.isMissingHard = false;
+                sub.isMissingSoft = false;
+            }
         }
         
         /* Capture the new CRC from the bus */
         const incomingCrc = ((msg.data[CONFIGCRC_OFFSET] << SHIFT_BYTE) |
-                            (msg.data[CONFIGCRC_OFFSET + 1] & BYTE_MASK));
+                             (msg.data[CONFIGCRC_OFFSET + 1] & BYTE_MASK));
 
         /** * CRC Change Detection Logic
          * If we know this node and the CRC is different, archive the state.
@@ -1386,6 +1617,19 @@ function updateNodeDatabase(msg) {
             console.warn(`CRC mismatch detected for node ${nodeString}: 0x${myNode.configCrc.toString(16)} -> 0x${incomingCrc.toString(16)}`);
             /* Snapshot the current (old) state before we overwrite it with the new CRC data */
             recordNodeSnapshot(nodeString, myNode);
+            /** reset flags so the interview process starts over */
+            myNode.lastSubModIdx = 0;
+            myNode.introComplete = false;
+
+            // Preserve the subModule object, but clear its contents
+            if (!myNode.subModule) {
+                myNode.subModule = {};
+            } else {
+                for (const key of Object.keys(myNode.subModule)) {
+                    delete myNode.subModule[key];
+                }
+            }
+
         }
         
         /* Update memory with the latest bus data */
@@ -1412,15 +1656,6 @@ function updateNodeDatabase(msg) {
             detectUnconfiguredSubmodules(nodeString, myNode, db);
 
             /* === Final check to tell if the node and sub-modules are all in sync === */
-
-            /** retrieve the number of submodules read from the bus for this node */
-            const busSubModCount = Object.keys(myNode.subModule).length;
-
-            const intendedRows = db.prepare(`
-                SELECT COUNT(*) AS cnt
-                FROM node_submodules
-                WHERE node_id = ?
-            `).get(nodeString);
 
             /** Check if all submodules are in sync */
             const subsInSync = Object.values(myNode.subModule)
@@ -1474,11 +1709,13 @@ function updateNodeDatabase(msg) {
         const personalityName = metadataCache.personalityNames.get(messageId) || "Unknown Personality";
 
         try {/** Exit if sub-module interview is already complete */
-            if (canDatabase[nodeString].subModule[workingIdx].partAComplete && canDatabase[nodeString].subModule[workingIdx].partBComplete) {
+            if (canDatabase[nodeString].subModule[workingIdx].partAComplete && 
+                canDatabase[nodeString].subModule[workingIdx].partBComplete) {
                 console.log("Node", nodeString, "sub-module already interviewed:", workingIdx);
                 return;
             }} catch (error) {
-                console.log("Node", nodeString, "interviewing new sub-module:", workingIdx, "module type:", messageStr, personalityName);
+                console.log("Node", nodeString, "interviewing new sub-module:", workingIdx, 
+                    "module type:", messageStr, personalityName);
             }
 
         let subModPartB = false; /* Two-part introduction process */
@@ -1590,6 +1827,9 @@ function hexStringToByteArray(hexString) {
 /* CAN Message Listener */
 channel.addListener("onMessage", (msg) => {
 
+    /* Log the frame in database */
+    logRxFrame(msg.id, msg.dlc, msg.data);
+    
     /* Update the in-memory database */
     updateNodeDatabase(msg);
 
