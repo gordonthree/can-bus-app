@@ -16,6 +16,8 @@
             --mismatch-bg: #3a0e0e;
             --mismatch-border: #aa4444;
             --mismatch-text: rgba(255, 255, 255, 0.918);
+            --okay-bg: #0d3114;
+            --not-okay-bg: #31140d;
         }
 
         body { 
@@ -43,10 +45,31 @@
         }
 
         .data-cell { 
+            display: flex;
+            align-items: center;
             font-family: 'Cascadia Code', monospace; 
             font-size: 0.9rem; 
             padding: 2px;
             padding-left: 4px;
+        }
+
+        .indicator-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            grid-template-rows: repeat(2, 1fr);
+            gap: 0.25rem;
+            padding: 0.25rem;
+            background-color: var(--card-bg);
+
+        }
+
+        .indicator-cell {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            border: 1px solid var(--border);
+            font-size: 0.7rem;
         }
 
         .id-cell {
@@ -67,7 +90,7 @@
 
         /* Specific override for the Inventory/Editor */
         #editor-container {
-            grid-template-columns: 0.3fr 0.3fr 2fr; 
+            grid-template-columns: 0.35fr 0.25fr 0.2fr 2fr; 
             height: auto; /* Allow growth or set specific height */
         }
 
@@ -113,7 +136,7 @@
             display: flex;
             flex-direction: column;
             gap: 8px;
-            padding: 12px;
+            padding: 4px;
         }
 
         .editor-input:focus, .cell-input:focus {

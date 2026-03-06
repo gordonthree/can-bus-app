@@ -403,11 +403,7 @@ wss.on('connection', (ws) => {
                         console.log(`Interview request received for node ${nodeId}`);
                         
                         const nodeObj = canDatabase[nodeId];
-                        if (!nodeObj || !nodeObj.intended || typeof nodeObj.intended.config_crc !== "number") {
-                            console.warn(`Cannot persist node ${nodeId}: intended CRC missing`);
-                            break;
-                        }
-
+  
                         // Convert nodeId string → byte array (big-endian)
                         const nodeIdBytes = hexStringToByteArray(nodeId);
 
@@ -705,7 +701,7 @@ function updateCalculatedCRC(nodeId) {
     if (!nodeObj.intended) nodeObj.intended = {};
     nodeObj.intended.config_crc = crc;
 
-    console.log(`Calculated CRC16 for node ${nodeId}: 0x${crc.toString(16).toUpperCase().padStart(4, "0")} Reported CRC16: 0x${nodeObj.configCrc.toString(16).toUpperCase().padStart(4, "0")}`);
+    console.log(`Intended CRC16 ${nodeId}: 0x${crc.toString(16).toUpperCase().padStart(4, "0")} Reported CRC16: 0x${nodeObj.configCrc.toString(16).toUpperCase().padStart(4, "0")}`);
     return crc;
 }
 
@@ -1657,10 +1653,15 @@ function updateNodeDatabase(msg) {
         const incomingCrc = ((msg.data[CONFIGCRC_OFFSET] << SHIFT_BYTE) |
                              (msg.data[CONFIGCRC_OFFSET + 1] & BYTE_MASK));
 
+        console.log(`Incoming CRC for node ${nodeString}: 0x${incomingCrc.toString(16)}`);
         /** * CRC Change Detection Logic
          * If we know this node and the CRC is different, archive the state.
          */
-        const crcChanged = isKnownNode && myNode.configCrc !== undefined && myNode.configCrc !== incomingCrc;
+        const crcChanged = ( 
+            isKnownNode && 
+            myNode.configCrc !== undefined && 
+            myNode.configCrc !== incomingCrc
+        );
 
         if (crcChanged) {
             console.warn(`CRC mismatch detected for node ${nodeString}: 0x${myNode.configCrc.toString(16)} -> 0x${incomingCrc.toString(16)}`);
@@ -1724,7 +1725,7 @@ function updateNodeDatabase(msg) {
             myNode.introComplete = true;
             // console.log("Node:", nodeString, "interview complete, not sending ack");
         } else {
-            console.log("Node:", nodeString, "Sub-module count:", myNode.subModCnt, `CRC: 0x${myNode.configCrc.toString(16).toUpperCase().padStart(4, "0")}` );
+            console.log("Introduction: ", nodeString, "Sub-mods:", myNode.subModCnt, `CRC: 0x${myNode.configCrc.toString(16).toUpperCase().padStart(4, "0")}` );
             /** Acknowledge the intro message */
             sendAckMsg(msg); 
         }

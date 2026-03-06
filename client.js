@@ -71,106 +71,7 @@ const INPUT_TYPE_SELECT = 2;
 /** Input type read-only text box 0 */
 const INPUT_TYPE_READ_ONLY = 0;
 
-/** Mapping of Sub-Module personalities to their configuration specifics.
- * Derived from the subModule_t C struct.
- * three html labels for each input field
- * three html input types 0 = read-only textbox, 1 = text numeric input, 2 = select dropdown
-*/
-const personalities = {
-    0x702: {
-        name: "ARGB Strip",
-        cfgMsgId: 0x432,
-        cfgMsgDlc: 8,
-        labels: ["Output Pin", "LED Count", "Color Order"],
-        inputs: [1, 1, 1]
-    },
-    0x701: {
-        name: "ARGB Strip",
-        cfgMsgId: 0x432,
-        cfgMsgDlc: 8,
-        labels: ["Output Pin", "LED Count", "Color Order"],
-        inputs: [1, 1, 1]
-    },
-    0x711: {
-        name: "Digital Input",
-        cfgMsgId: 0x433,
-        cfgMsgDlc: 8,
-        labels: ["Input Pin", "Input Resistor", "Inverted"],
-        inputs: [1, 2, 2]
-    },
-    0x70A: {
-        name: "Analog Backlight",
-        cfgMsgId: 0x434,
-        cfgMsgDlc: 8,
-        labels: ["Output Pin", "Blink/PWM Rate", "Output Mode"],
-        inputs: [1, 1, 2]
-    },
-    0x744: {
-        name: "Digital Output",
-        cfgMsgId: 0x434,
-        cfgMsgDlc: 8,
-        labels: ["Output Pin", "Blink/PWM Rate", "Output Mode"],
-        inputs: [1, 1, 2]
-    },
-    0x70B: {
-        name: "LCD Display",
-        cfgMsgId: 0x435,
-        cfgMsgDlc: 8,
-        labels: ["Reserved", "Reserved", "Reserved"],
-        inputs: [0, 0, 0]
-    }
-}
 
-
-/** * Mapping of Sub-Module personalities to their configuration labels.
- * Derived from the subModule_t C struct.
- */
-const PERSONALITY_MAP_LABELS = {
-    0x702: ["Output Pin", "LED Cnt", "Color Order"], /* ARGB Strip */
-    0x711: ["Input Pin", "Input Resistor (PU/PD/Float)", "Inverted"], /* Digital input */
-    0x70A: ["Output Pin", "Blink/PWM Rate", "Output Mode"], /* Digital output */
-    0x70B: ["Reserved", "Reserved", "Reserved"], /* LCD Display */
-    0x744: ["Output Pin", "Blink/PWM Rate", "Output Mode"]
-};
-
-/** Input types for each sub-module personality 0 = read-only, 1 = numeric, 2 = dropdown */
-const PERSONALITY_MAP_INPUTS = {
-    0x702: [1, 1, 1], /* ARGB Strip */
-    0x711: [1, 2, 2], /* Digital input */
-    0x70A: [1, 1, 2], /* Digital output */
-    0x70B: [0, 0, 0], /* LCD Display */
-    0x744: [1, 1, 2] /* Digital output */
-};
-
-/** Analog LED strip color order, from canbus_defs.h */
-const ANALOG_RGB_COLOR_IDX_MAP = {
-    0: "Red",
-    1: "Green",
-    2: "Blue",
-    3: "White",
-    4: "RGB",
-    5: "RGBW",
-    6: "RGBA",
-    7: "RGBCCT"
-}
-
-/** Digital input resistor modes, from canbus_defs.h */
-const DIGITAL_INPUT_RES_MODE = {
-    0: "Pullup",
-    1: "Pulldown",
-    2: "Floating"
-}
-
-/** Digital output modes, from canbus_defs.h */
-const DIGITAL_OUTPUT_MODE = {
-    0: "Off",
-    1: "On",
-    2: "Toggle",
-    3: "Momentary",
-    4: "Blink",
-    5: "Strobe",
-    6: "PWM"
-}
 
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -858,12 +759,13 @@ function renderSubModRow2(nodeId, idxStr, subMod) {
 function renderSubmoduleCard(nodeId, idxStr, subMod) {
     const subModIdx = idxStr;
 
-    /* Remember grid is only three columns wide */
+    /* Remember grid is now four columns wide */
 
     /* === First column: Sub-module Command Cell, buttons would go here */
     const subCmdCell = document.createElement('div');
     subCmdCell.className = 'data-cell';
     subCmdCell.classList.add('sub-cmd');
+    subCmdCell.justifyContent = 'left';
 
     /** command cell text */
     const sCmdText = document.createElement('span');
@@ -878,13 +780,17 @@ function renderSubmoduleCard(nodeId, idxStr, subMod) {
     subIdCell.classList.add('sub-id');
 
     /** Sub-module ID text */
-    const subIdText = document.createElement('span');
-    subIdText.className = 'hex-id';
-    subIdText.innerText = `submod ${idxStr}`;
-    subIdText.style.paddingLeft = '4px';
+    const subIdText          = document.createElement('span');
+    subIdText.className      = 'hex-id';
+    subIdText.innerText      = `submod ${idxStr}`;
+    subIdText.style.fontSize = '0.8rem';
+    // subIdText.style.paddingLeft = '4px';
     subIdCell.appendChild(subIdText);
 
-    /* === Third column: data entry rows */
+    /* === Third column: Sub-module indicator Cell */
+    const subIndicatorCell = renderSubIndicatorCell(nodeId, idxStr, subMod);
+
+    /* === Fourth column: data entry rows */
 
     /** Sub-module Data Cell (Stacked rows) */
     const subDataCell = document.createElement('div');
@@ -909,7 +815,7 @@ function renderSubmoduleCard(nodeId, idxStr, subMod) {
     /** Add config stack to the sub-module data container */
     subDataCell.appendChild(sStack);
 
-    return [subCmdCell, subIdCell, subDataCell];
+    return [subCmdCell, subIdCell, subIndicatorCell, subDataCell];
 }
 
 function renderNodeDataCell(nodeId, nodeData) {
@@ -1007,6 +913,140 @@ function renderNodeDataCell(nodeId, nodeData) {
     return dataCell;
 }
 
+function formatTimestampAsLocal(timestamp) {
+    const date = new Date(timestamp);
+
+    // Options for date, hours, and minutes
+    const options = {
+        year: 'numeric',
+        month: 'numeric',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: 'numeric',
+        hour12: false // Use 24-hour format
+    };
+
+    // Format the date using the user's default locale
+    const formattedDate = new Intl.DateTimeFormat(undefined, options).format(date);
+    
+    return formattedDate;
+}
+
+/** Return just the hours and minutes of a timestamp */
+function formatTimestampAsHHmm(timestamp) {
+    const date = new Date(timestamp);
+
+    // Options for date, hours, and minutes
+    const formattedDate = date.toLocaleTimeString('en-US', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false // Use 24-hour format
+    });
+
+    return formattedDate;
+}
+function timestampColor(timestamp) {
+    const date = new Date(timestamp);
+    const now = new Date();
+    const oneHourMs = 60 * 60 * 1000;
+    const oneDayMs = 24 * oneHourMs;
+
+    // Calculate the time difference in milliseconds
+    const timeDiff = now.getTime() - date.getTime();
+
+    // Return color based on age of timestamp
+    if (timeDiff >= oneDayMs) { // one day or more
+        return "red";
+    } else if (timeDiff >= oneHourMs && timeDiff < oneDayMs) {
+        return "yellow"; // one hour to one day
+    } else {
+        return "green"; // less than one hour
+    }
+}
+
+function renderNodeIndicatorCell(nodeId, nodeData) {
+    // indicator container
+    const indicatorGrid = document.createElement('div');
+    indicatorGrid.className = 'indicator-grid'; // 2x2 grid
+
+    /** Badge to the node id cell to show overall sync status - check mark and caution symbol */
+    const nodeSyncBadge = document.createElement("div");
+    nodeSyncBadge.className = "indicator-cell";
+    nodeSyncBadge.innerText = "[SYNC]"
+    nodeSyncBadge.title = nodeData.isInSync ? "Node is fully in sync" : "Parent or sub-module out of sync";
+    nodeSyncBadge.style.color = nodeData.isInSync ? "green" : "red";
+
+    /** Badge to the node id cell to show CRC match status - bug symbol */
+    const crcSyncBadge = document.createElement("div");
+    crcSyncBadge.className = "indicator-cell";
+    crcSyncBadge.innerText = "[CRC]";
+    // crcSyncBadge.innerHTML = '&#128027';
+    // crcSyncBadge.title = `CRC: ${nodeData.parentComparison.configCrcMatch}`
+    crcSyncBadge.title = nodeData.parentComparison.configCrcMatch ? "CRC matches" : "CRC mismatch";
+    crcSyncBadge.style.color = nodeData.parentComparison.configCrcMatch ? "green" : "red";
+
+    /** Mouseover point to show First Seen time stamp - clock symbol */
+    const cellFirstSeenTime = document.createElement("div");
+    cellFirstSeenTime.className = "indicator-cell";
+    cellFirstSeenTime.innerText = "🕒";
+    cellFirstSeenTime.title = "First seen: " + formatTimestampAsLocal(nodeData.firstSeen); 
+    // cellFirstSeenTime.style.color = nodeData.isMissingSoft ? "green" : "red";
+
+    /** Mouseover point to show Last Seen time stamp - hourglass symbol */
+    const cellLastSeenTime = document.createElement("div");
+    cellLastSeenTime.className = "indicator-cell";
+    cellLastSeenTime.innerText = "⌛";
+    cellLastSeenTime.title = "Last seen: " + formatTimestampAsLocal(nodeData.lastSeen);
+    cellLastSeenTime.style.color = timestampColor(nodeData.lastSeen);
+
+    indicatorGrid.append(nodeSyncBadge, crcSyncBadge, cellFirstSeenTime, cellLastSeenTime);
+
+    return indicatorGrid;
+}
+
+function renderSubIndicatorCell(nodeId, idxStr, subMod) {
+    // indicator container
+    const indicatorGrid = document.createElement('div');
+    indicatorGrid.className = 'indicator-grid'; // 2x2 grid
+    indicatorGrid.id        = `sub-mod-${nodeId}-${idxStr}-indicator-grid`;
+
+    /** Badge to the node id cell to show overall sync status - check mark and caution symbol */
+    const subSyncBadge       = document.createElement("div");
+    subSyncBadge.className   = "indicator-cell";
+    subSyncBadge.innerText   = "[SYNC]"
+    subSyncBadge.title       = subMod.isInSync ? "Sub-mobule in sync" : "Sub-module out of sync";
+    subSyncBadge.style.color = subMod.isInSync ? "green" : "red";
+    subSyncBadge.id          = `sub-mod-${nodeId}-${idxStr}-sync-badge`;
+
+    /** Badge to the node id cell to show last seen time */
+    const subLastSeenBadge = document.createElement("div");
+    subLastSeenBadge.className   = "indicator-cell";
+    subLastSeenBadge.innerText   = `[${formatTimestampAsHHmm(subMod.lastSeen)}]`;
+    subLastSeenBadge.title       = "Last update: " + formatTimestampAsLocal(subMod.lastSeen);
+    subLastSeenBadge.style.color = timestampColor(subMod.lastSeen);
+    subLastSeenBadge.id          = `sub-mod-${nodeId}-${idxStr}-last-seen-badge`;
+
+    /** Badge to show soft-missing status - clock symbol */
+    const softMissingBadge = document.createElement("div");
+    softMissingBadge.className = "indicator-cell";
+    softMissingBadge.innerText = subMod.isMissingSoft ? "⌛" : "🕒";
+    softMissingBadge.title = subMod.isMissingSoft ? "Sub-module missed recent interview" : "Not late";
+    softMissingBadge.style.backgroundColor = subMod.isMissingHard ? "var(--not-okay-bg)" : "var(--okay-bg)";
+    softMissingBadge.id = `sub-mod-${nodeId}-${idxStr}-soft-missing-badge`;
+
+    /** Badge to show hard-missing status - hourglass symbol */
+    const hardMissingBadge = document.createElement("div");
+    hardMissingBadge.className = "indicator-cell";
+    hardMissingBadge.innerText = subMod.isMissingHard ? "⌛" : "🕒";
+    hardMissingBadge.title = subMod.isMissingHard ?  "Sub-module offline" : "Not missing";
+    hardMissingBadge.style.backgroundColor = subMod.isMissingHard ? "var(--not-okay-bg)" : "var(--okay-bg)";
+    hardMissingBadge.id = `sub-mod-${nodeId}-${idxStr}-hard-missing-badge`;
+
+    indicatorGrid.append(subSyncBadge, subLastSeenBadge, softMissingBadge, hardMissingBadge);
+
+    return indicatorGrid;
+}
+
 function renderNodeIdCell(nodeId, nodeData) {
     // 2. ID Cell
     const idCell = document.createElement('div');
@@ -1019,25 +1059,25 @@ function renderNodeIdCell(nodeId, nodeData) {
         idCell.classList.add("hex-id");
     }
     /** Add a badge to the node id cell to show sync status */
-    const nodeSyncBadge = document.createElement("span");
-    nodeSyncBadge.innerText = nodeData.isInSync ? "✓" : "⚠";
-    nodeSyncBadge.style.color = nodeData.isInSync ? "green" : "red";
-    nodeSyncBadge.style.fontSize = "0.8rem";
-    nodeSyncBadge.style.paddingLeft = "6px";
+    // const nodeSyncBadge = document.createElement("span");
+    // nodeSyncBadge.innerText = nodeData.isInSync ? "✓" : "⚠";
+    // nodeSyncBadge.style.color = nodeData.isInSync ? "green" : "red";
+    // nodeSyncBadge.style.fontSize = "0.8rem";
+    // nodeSyncBadge.style.paddingLeft = "6px";
 
 
     const idCellText = document.createElement('span');
     idCellText.style.fontSize = '0.6rem';
-    idCellText.innerText = nodeId.toUpperCase() 
-    idCellText.style.paddingLeft = '4px';
+    idCellText.innerText = "ID: " + nodeId.toUpperCase() 
+    // idCellText.style.paddingLeft = '4px';
 
 
     const crcCellText = document.createElement('span');
     crcCellText.style.fontSize = '0.6rem';
     crcCellText.style.paddingLeft = '6px';
-    crcCellText.innerText = "CRC: " + nodeData.configCrc.toString(HEX_BASE).toUpperCase();
+    crcCellText.innerText = "CRC: 0x" + nodeData.configCrc.toString(HEX_BASE).toUpperCase();
 
-    idCell.append(idCellText, crcCellText, nodeSyncBadge);
+    idCell.append(idCellText, crcCellText);
 
     return idCell;
 }
@@ -1134,7 +1174,8 @@ function renderNodeDatabase(nodes) {
      */
     container.innerHTML = `
         <div class="header-cell">Command</div>
-        <div class="header-cell">Hardware ID</div>
+        <div class="header-cell">Hardware</div>
+        <div class="header-cell">Information</div>
         <div class="header-cell">Configuration</div>
     `;
 
@@ -1144,23 +1185,26 @@ function renderNodeDatabase(nodes) {
         /* Create three columns for the grid layout */
 
         /** 1. Render Command Buttons Cell */
-        const cmdCell  = renderNodeCmdButtons(nodeId, isExpanded);
+        const cmdCell       = renderNodeCmdButtons(nodeId, isExpanded);
 
         /** 2. Render Hardware ID Cell */
-        const idCell   = renderNodeIdCell(nodeId, nodeData);
+        const idCell        = renderNodeIdCell(nodeId, nodeData);
+
+        /** 3. Render Indicator Cell */
+        const indicatorCell = renderNodeIndicatorCell(nodeId, nodeData);
 
         /** 3. Data Cell (Container for config labels and inputs) */
-        const dataCell = renderNodeDataCell(nodeId, nodeData);
+        const dataCell      = renderNodeDataCell(nodeId, nodeData);
 
         /** Append row to grid */
-        container.append(cmdCell, idCell, dataCell); 
+        container.append(cmdCell, idCell, indicatorCell, dataCell); 
 
         /** --- SUB-MODULES --- */
         if (isExpanded && nodeData.subModule) {
             /** loop through the sub-module entires and create editor rows */
             for (const [idxStr, subMod] of Object.entries(nodeData.subModule)) {
-                const [subCmdCell, subIdCell, subDataCell] = renderSubmoduleCard(nodeId, idxStr, subMod);
-                container.append(subCmdCell, subIdCell, subDataCell); /* Add three sub module columns to the grid */;
+                const [subCmdCell, subIdCell, subIndicatorCell, subDataCell] = renderSubmoduleCard(nodeId, idxStr, subMod);
+                container.append(subCmdCell, subIdCell, subIndicatorCell, subDataCell); /* Add three sub module columns to the grid */;
             } /* End submodule For loop */
         }
     }
