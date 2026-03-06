@@ -936,6 +936,7 @@ function dispatchParentNodeField(nodeId, fieldId, value) {
     if (fieldId === "nodeTypeMsg") {
         const introMsgId_hi = (value >> BYTE_SHIFT) & BYTE_MASK;
         const introMsgId_lo = value & BYTE_MASK;
+        const introMsgDlc   = node.intended.node_type_dlc ?? DEFAULT_DLC;
 
         writeCanMessageBE(
             CAN_MSG.CFG_NODE_INTRO_MSG_ID,
@@ -943,7 +944,7 @@ function dispatchParentNodeField(nodeId, fieldId, value) {
                 nodeIdBytes,
                 introMsgId_hi,
                 introMsgId_lo,
-                DEFAULT_DLC
+                introMsgDlc
             ],
             CAN_MSG.CFG_NODE_INTRO_MSG_DLC
         );
@@ -998,7 +999,8 @@ function dispatchSubmoduleField(nodeId, subModIdx, fieldId, value) {
                 introMsgId_hi,
                 introMsgId_lo,
                 sub.intended.intro_msg_dlc
-            ]
+            ],
+            CAN_MSG.CFG_SUB_INTRO_MSG_DLC
         );
     }
 
@@ -1014,7 +1016,8 @@ function dispatchSubmoduleField(nodeId, subModIdx, fieldId, value) {
                 dataMsgId_hi,
                 dataMsgId_lo,
                 sub.intended.data_msg_dlc
-            ]
+            ],
+            CAN_MSG.CFG_SUB_DATA_MSG_DLC
         );
     }
 }
@@ -1051,7 +1054,8 @@ function dispatchSubmoduleRawByte(nodeId, subModIdx) {
             sub.intended.config_byte0,
             sub.intended.config_byte1,
             sub.intended.config_byte2
-        ]
+        ],
+        CAN_MSG.CFG_SUB_RAW_DATA_DLC
     );
 }
 
@@ -1363,7 +1367,11 @@ function getMsgId(msg) {
 }
 
 function sendRequestIntro() {
-    writeCanMessageBE(CAN_MSG.REQ_NODE_INTRO_ID, myNodeId);
+    writeCanMessageBE(
+        CAN_MSG.REQ_NODE_INTRO_ID, 
+        [0, 0, 0, 0], 
+        CAN_MSG.REQ_NODE_INTRO_DLC
+    ); // send all zeros for node ID to indicate broadcast message
     lastReqIntro = Date.now();
 }
 
@@ -1386,7 +1394,11 @@ function handlePeroidicMessages() {
     }
 
     if (Date.now() - lastTsMsg > sendTsInterval) {
-        writeCanMessageBE(CAN_MSG.DATA_EPOCH_ID, getTimestampPayload(), CAN_MSG.DATA_EPOCH_DLC);
+        writeCanMessageBE(
+            CAN_MSG.DATA_EPOCH_ID, 
+            getTimestampPayload(), 
+            CAN_MSG.DATA_EPOCH_DLC
+        );
         saveDatabaseToFile(); /* write database to disk */
         lastTsMsg = Date.now();
     }
@@ -1402,7 +1414,11 @@ function sendAckMsg(msg) {
 
     const nodeId = getNodeId(msg);
 
-    writeCanMessageBE(CAN_MSG.ACK_INTRO_ID, nodeId, CAN_MSG.ACK_INTRO_DLC);
+    writeCanMessageBE(
+        CAN_MSG.ACK_INTRO_ID, 
+        nodeId, 
+        CAN_MSG.ACK_INTRO_DLC
+    );
 }
 
 /**
