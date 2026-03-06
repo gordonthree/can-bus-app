@@ -436,6 +436,16 @@ function persistNodeToBus(nodeId) {
     alert(`Instructed server to persist Node ${nodeId} to CAN-bus.`);
 }
 
+function interviewNode(nodeId) {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    
+    socket.send(JSON.stringify({
+        type: 'INTERVIEW_NODE',
+        canMsg: 'REQ_NODE_INTRO', // server should send 0x401 CFG_WRITE_NVS
+        nodeId: nodeId
+    }));
+}
+
 /**
  * Visual feedback that server has received and processed the update.
  * @param {string} nodeId - The ID of the updated node.
@@ -1012,23 +1022,22 @@ function renderNodeIdCell(nodeId, nodeData) {
     const nodeSyncBadge = document.createElement("span");
     nodeSyncBadge.innerText = nodeData.isInSync ? "✓" : "⚠";
     nodeSyncBadge.style.color = nodeData.isInSync ? "green" : "red";
-    nodeSyncBadge.style.fontSize = "0.6rem";
-    nodeSyncBadge.style.marginLeft = "6px";
-    idCell.appendChild(nodeSyncBadge);
+    nodeSyncBadge.style.fontSize = "0.8rem";
+    nodeSyncBadge.style.paddingLeft = "6px";
 
 
     const idCellText = document.createElement('span');
     idCellText.style.fontSize = '0.6rem';
-    idCellText.innerText = "ID: " + nodeId.toUpperCase() 
+    idCellText.innerText = nodeId.toUpperCase() 
     idCellText.style.paddingLeft = '4px';
 
-    idCell.appendChild(idCellText);    
 
     const crcCellText = document.createElement('span');
     crcCellText.style.fontSize = '0.6rem';
     crcCellText.style.paddingLeft = '6px';
-    crcCellText.innerText = "CRC: " + nodeData.configCrc;
-    idCell.appendChild(crcCellText);
+    crcCellText.innerText = "CRC: " + nodeData.configCrc.toString(HEX_BASE).toUpperCase();
+
+    idCell.append(idCellText, crcCellText, nodeSyncBadge);
 
     return idCell;
 }

@@ -398,9 +398,33 @@ wss.on('connection', (ws) => {
                         broadcastAuditLog(); /**< Refresh all clients with the new comment */
                         break;
 
+                    case 'INTERVIEW_NODE': {
+                        const nodeId = request.nodeId;
+                        console.log(`Interview request received for node ${nodeId}`);
+                        
+                        const nodeObj = canDatabase[nodeId];
+                        if (!nodeObj || !nodeObj.intended || typeof nodeObj.intended.config_crc !== "number") {
+                            console.warn(`Cannot persist node ${nodeId}: intended CRC missing`);
+                            break;
+                        }
+
+                        // Convert nodeId string → byte array (big-endian)
+                        const nodeIdBytes = hexStringToByteArray(nodeId);
+
+                        // Clear flags so node can get interviewed again
+                        resetNodeFlags(nodeObj);
+
+
+                        writeCanMessageBE(
+                            CAN_MSG.REQ_NODE_INTRO_ID, 
+                            nodeIdBytes, 
+                            CAN_MSG.REQ_NODE_INTRO_DLC
+                        );
+           
+                        break;
+                    }
                     case 'SAVE_TO_BUS': {
                         const nodeId = request.nodeId;
-
                         console.log(`Persist request received for node ${nodeId}`);
 
                         const nodeObj = canDatabase[nodeId];
@@ -425,13 +449,15 @@ wss.on('connection', (ws) => {
                                 nodeIdBytes,   // 4 bytes
                                 crc_hi,        // big-endian CRC
                                 crc_lo
-                            ]
+                            ],
+                            CAN_MSG.CFG_WRITE_NVS_DLC
                         );
 
-                        // Send reboot command (unchanged)
+                        // Send reboot command 
                         writeCanMessageBE(
                             CAN_MSG.CFG_REBOOT_ID,
-                            nodeIdBytes
+                            nodeIdBytes,
+                            CAN_MSG.CFG_REBOOT_DLC
                         );
 
                         console.log(
@@ -449,33 +475,6 @@ wss.on('connection', (ws) => {
                         }));
                         break;
 
-                    case 'REQUEST_NODE_INTERVIEW':
-                        if (request.nodeId) {
-                            const nodeString = request.nodeId;
-                            
-                            /** * Documentation-First Cleanup:
-                             * Reset the in-memory state so the engine re-ingests all frames.
-                             */
-                            if (canDatabase[nodeString]) {
-                                console.log(`Resetting inventory for ${nodeString} before re-interview...`);
-                                
-                                /** Clear sub-modules and reset tracking indices */
-                                canDatabase[nodeString].subModule     = {};
-                                canDatabase[nodeString].lastSubModIdx = 0;
-                                canDatabase[nodeString].introComplete = false;
-                            }
-
-                            /** Broadcast the cleared state to all clients so the UI updates immediately */
-                            broadcastDatabase();
-
-                            /** Construct and send the CAN command */
-                            const targetNodeId = hexStringToByteArray(nodeString);
-                            writeCanMessageBE(CAN_MSG.REQ_NODE_INTRO_ID, targetNodeId);
-                            
-                            console.log(`Sent REQ_NODE_INTRO (0x401) to node: ${nodeString}`);
-                        }
-                        break;
-                        
                         case 'GET_METADATA':
                             ws.send(JSON.stringify({
                                 type: 'DEFINITION_METADATA',
@@ -616,9 +615,9 @@ function crc16_ccitt(buf, initial = 0xFFFF) {
  */
 function serializeNodeInfo(nodeObj) {
     // ---- Struct sizes ----
-    const NODEINFO_STRUCT_SIZE   = 136;
-    const SUBMODULE_STRUCT_SIZE  = 16;
-    const MAX_SUBMODULES         = 8;
+    const NODEINFO_STRUCT_SIZE   = 136; // total bytes of struct
+    const SUBMODULE_STRUCT_SIZE  = 16;  // bytes of each submodule union
+    const MAX_SUBMODULES         = 8;   // total number of submodules
 
     // ---- Parent-node field offsets ----
     const OFFSET_NODE_ID         = 128; // uint32_t
@@ -627,9 +626,9 @@ function serializeNodeInfo(nodeObj) {
     const OFFSET_SUBMOD_COUNT    = 135; // uint8_t
 
     // ---- Submodule field offsets (relative to each submodule block) ----
-    const SM_OFFSET_RAW0         = 0;
-    const SM_OFFSET_RAW1         = 1;
-    const SM_OFFSET_RAW2         = 2;
+    const SM_OFFSET_RAW0         = 0;   // uint8_t
+    const SM_OFFSET_RAW1         = 1;   // uint8_t
+    const SM_OFFSET_RAW2         = 2;   // uint8_t
     // bytes 3–8 are padding
     const SM_OFFSET_INTRO_ID     = 9;   // uint16 LE
     const SM_OFFSET_DATA_ID      = 11;  // uint16 LE
@@ -689,6 +688,11 @@ function serializeNodeInfo(nodeObj) {
 }
 
 
+/**
+ * Updates the calculated CRC16 value for a given node in the database.
+ * @param {string} nodeId - The node ID string.
+ * @returns {number} The calculated CRC16 value in decimal.
+ */
 function updateCalculatedCRC(nodeId) {
     const nodeObj = canDatabase[nodeId];
     if (!nodeObj) {
@@ -908,7 +912,11 @@ function updateParentNodeField(nodeId, fieldId, value) {
     }
 
     if (!node.intended) node.intended = {};
-    node.intended[column] = value;
+    const oldValue = node.intended[column]; /* save old value for audit log */
+    node.intended[column] = value; /* overwrite intended value */
+
+    /** insert row into audit log */
+    insertAuditLog(nodeId, null, column, oldValue, value);
 
     console.log(`Updated parent node ${nodeId} fieldId ${fieldId} column ${column} value ${value}`);
 
@@ -926,7 +934,7 @@ function dispatchParentNodeField(nodeId, fieldId, value) {
     const nodeIdBytes = hexStringToByteArray(nodeId);
 
     if (fieldId === "nodeTypeMsg") {
-        const introMsgId_hi = (value >> SHIFT_BYTE) & BYTE_MASK;
+        const introMsgId_hi = (value >> BYTE_SHIFT) & BYTE_MASK;
         const introMsgId_lo = value & BYTE_MASK;
 
         writeCanMessageBE(
@@ -936,7 +944,8 @@ function dispatchParentNodeField(nodeId, fieldId, value) {
                 introMsgId_hi,
                 introMsgId_lo,
                 DEFAULT_DLC
-            ]
+            ],
+            CAN_MSG.CFG_NODE_INTRO_MSG_DLC
         );
     }
 
@@ -957,6 +966,12 @@ function updateSubmoduleField(nodeId, subModIdx, fieldId, value) {
     const normalizedValue =
         column === "save_state" ? Number(value) : value;
 
+    const oldValue = sub.intended[column]; /* save old value for audit log */
+    
+    /** insert row into audit log */
+    insertAuditLog(nodeId, subModIdx, column, oldValue, normalizedValue);
+    
+    /** update in-memory value */
     sub.intended[column] = normalizedValue;
 
     db.prepare(`
@@ -1009,6 +1024,12 @@ function updateSubmoduleRawByte(nodeId, subModIdx, byteIndex, value) {
 
     const column = `config_byte${byteIndex}`;
 
+    const oldValue = sub.intended[column]; /* save old value for audit log */
+    
+    /** insert row into audit log */
+    insertAuditLog(nodeId, subModIdx, column, oldValue, value);
+
+    /** update in-memory value */
     sub.intended[column] = value;
 
     db.prepare(`
@@ -1227,7 +1248,7 @@ function syncNodeToDatabase(nodeId, nodeData) {
 function insertAuditLog(nodeId, subModIdx = null, field, oldValue = null, newValue = null) {
     db.prepare(`
         INSERT INTO audit_log 
-        (node_id, submod_idx, field_name, old_value, new_value)
+        (node_id, sub_idx, field, old_value, new_value)
         VALUES (?, ?, ?, ?, ?)
     `).run(nodeId, subModIdx, field, oldValue, newValue);
 }
@@ -1272,8 +1293,8 @@ function getTimestampPayload() {
  * @param {number} id - The CAN arbitration ID
  * @param {Array|number} data - Raw data to be packed into the CAN frame
  */
-function writeCanMessageBE(id, data) {
-    const buffer = Buffer.alloc(CAN_STD_DLC);
+function writeCanMessageBE(id, data, dlc = CAN_STD_DLC) {
+    const buffer = Buffer.alloc(dlc);
 
     let dataArray = [];
 
@@ -1293,11 +1314,9 @@ function writeCanMessageBE(id, data) {
         dataArray = [data];
     }
 
-    let dlc = 0;
     dataArray.forEach((value, index) => {
-        if (index < CAN_STD_DLC) {
+        if (index < dlc) {
             buffer.writeUInt8(value, index);
-            dlc++;
         }
     });
 
@@ -1367,7 +1386,7 @@ function handlePeroidicMessages() {
     }
 
     if (Date.now() - lastTsMsg > sendTsInterval) {
-        writeCanMessageBE(CAN_MSG.DATA_EPOCH_ID, getTimestampPayload());
+        writeCanMessageBE(CAN_MSG.DATA_EPOCH_ID, getTimestampPayload(), CAN_MSG.DATA_EPOCH_DLC);
         saveDatabaseToFile(); /* write database to disk */
         lastTsMsg = Date.now();
     }
@@ -1383,7 +1402,7 @@ function sendAckMsg(msg) {
 
     const nodeId = getNodeId(msg);
 
-    writeCanMessageBE(CAN_MSG.ACK_INTRO_ID, nodeId);
+    writeCanMessageBE(CAN_MSG.ACK_INTRO_ID, nodeId, CAN_MSG.ACK_INTRO_DLC);
 }
 
 /**
@@ -1553,6 +1572,20 @@ function detectMissingSubmodules(nodeString, myNode) {
     }
 }
 
+function resetNodeFlags(myNode) {
+    myNode.lastSubModIdx = 0;
+    myNode.introComplete = false;
+
+    // Preserve the subModule object, but clear its contents
+    if (!myNode.subModule) {
+        myNode.subModule = {};
+    } else {
+        for (const key of Object.keys(myNode.subModule)) {
+            delete myNode.subModule[key];
+        }
+    }
+}
+
 /**
  * Store and organize network modules by Node Type (identifer 0x780-0x7FF)
  * Keep track of the last seen time for each node, as well as associated
@@ -1618,17 +1651,7 @@ function updateNodeDatabase(msg) {
             /* Snapshot the current (old) state before we overwrite it with the new CRC data */
             recordNodeSnapshot(nodeString, myNode);
             /** reset flags so the interview process starts over */
-            myNode.lastSubModIdx = 0;
-            myNode.introComplete = false;
-
-            // Preserve the subModule object, but clear its contents
-            if (!myNode.subModule) {
-                myNode.subModule = {};
-            } else {
-                for (const key of Object.keys(myNode.subModule)) {
-                    delete myNode.subModule[key];
-                }
-            }
+            resetNodeFlags(myNode);
 
         }
         
@@ -1828,7 +1851,7 @@ function hexStringToByteArray(hexString) {
 channel.addListener("onMessage", (msg) => {
 
     /* Log the frame in database */
-    logRxFrame(msg.id, msg.dlc, msg.data);
+    logRxFrame(msg.id, msg.data.length, msg.data);
     
     /* Update the in-memory database */
     updateNodeDatabase(msg);
