@@ -355,7 +355,7 @@ function persistNodeToBus(nodeId) {
         nodeId: nodeId
     }));
     
-    alert(`Instructed server to persist Node ${nodeId} to CAN-bus.`);
+    // alert(`Instructed server to persist Node ${nodeId} to CAN-bus.`);
 }
 
 function interviewNode(nodeId) {
