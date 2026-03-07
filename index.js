@@ -457,6 +457,9 @@ wss.on('connection', (ws) => {
                             CAN_MSG.CFG_REBOOT_DLC
                         );
 
+                        /** clear flags so node can interview again */
+                        resetNodeFlags(nodeObj);
+
                         console.log(
                             `Sent CFG_WRITE_NVS (0x436) with CRC 0x${crc.toString(16).padStart(4, "0")} to node ${nodeId}`
                         );
