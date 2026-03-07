@@ -333,7 +333,7 @@ wss.on('connection', (ws) => {
 
                         const node = canDatabase[nodeId];
 
-                        console.log(`updating parent node ${nodeId} field ${fieldId} to ${value}`);
+                        console.log(`updating  node ${nodeId} field ${fieldId} to ${value.toString(HEX_BASE)}`);
 
                         /** Update in-memory and sql database */
                         updateParentNodeField(nodeId, fieldId, value);
@@ -353,7 +353,7 @@ wss.on('connection', (ws) => {
                         const { fieldId, value, subModIdx } = request.payload;
                         const sub = canDatabase[nodeId].subModule[subModIdx];
 
-                        console.log(`updating node ${nodeId} submodule ${subModIdx} field ${fieldId} to ${value}`);
+                        console.log(`updating node ${nodeId} submodule ${subModIdx} field ${fieldId} to ${value.toString(HEX_BASE)}`);
 
                         /** update in-memory and sql database */
                         updateSubmoduleField(nodeId, subModIdx, fieldId, value);
@@ -429,11 +429,15 @@ wss.on('connection', (ws) => {
                             break;
                         }
 
-                        // const crc = nodeObj.intended.config_crc;
-                        const crc = nodeObj.configCrc;
+                        // write new settings to datbase as "intended settings"
+                        updateFullNode(nodeId);
+
 
                         // Convert nodeId string → byte array (big-endian)
                         const nodeIdBytes = hexStringToByteArray(nodeId);
+
+                        /** Recalculate CRC */
+                        const crc = updateCalculatedCRC(nodeId);
 
                         // Split CRC into big-endian bytes
                         const crc_hi = (crc >> 8) & 0xFF;
@@ -705,6 +709,12 @@ function updateCalculatedCRC(nodeId) {
     if (!nodeObj.intended) nodeObj.intended = {};
     nodeObj.intended.config_crc = crc;
 
+    const crcMatch =  nodeObj?.parentComparison?.configCrcMatch; 
+    if (crc === nodeObj.configCrc && crcMatch) { 
+        /** set CRC match flag if calculated matches reported, and the flag exists */
+        nodeObj.parentComparison.configCrcMatch = true;
+    }
+
     console.log(`Intended CRC16 ${nodeId}: 0x${crc.toString(16).toUpperCase().padStart(4, "0")} Reported CRC16: 0x${nodeObj.configCrc.toString(16).toUpperCase().padStart(4, "0")}`);
     return crc;
 }
@@ -812,14 +822,17 @@ function broadcastAuditLog() {
  * @param {object} myNode - The node object containing the sub-module information.
  * @return {void}
  */
-function seedSubModules(nodeString, myNode) {
+function seedSubModules(nodeString, myNode, force = false) {
     /**
      * Insert intended submodule state into SQLite.
      * intro_msg_dlc is now included because it participates in the node’s CRC image
      * and must be part of the authoritative intended configuration.
      */
+
+    const useForce = force ? "REPLACE" : "IGNORE";
+
     const insertSubmoduleIntended = db.prepare(`
-        INSERT OR IGNORE INTO node_submodules
+        INSERT OR ${useForce} INTO node_submodules
         (node_id, sub_index, personality_id, intro_msg_dlc,
         config_byte0, config_byte1, config_byte2,
         data_msg_id, data_msg_dlc, save_state, updated_at)
@@ -892,7 +905,7 @@ function seedNodeIntendedTable() {
             (node_id, node_type_msg, node_type_dlc, submod_count, config_crc, updated_at)
         VALUES (?, ?, ?, ?, ?, ?)
     `);
-
+        
     const now = Date.now();
 
     for (const nodeId of Object.keys(canDatabase)) {
@@ -907,6 +920,33 @@ function seedNodeIntendedTable() {
             Date.now()
         );
     }
+}
+
+function updateFullNode(nodeId) {
+    if (!nodeId) return;
+
+    /** First update the parent node */
+    const insert = db.prepare(`
+        INSERT OR REPLACE INTO node_intended
+            (node_id, node_type_msg, node_type_dlc, submod_count, config_crc, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+    `);
+
+    const node = canDatabase[nodeId];
+    console.log("Node update commit");
+    insert.run(
+        nodeId,
+        node.nodeTypeMsg,
+        node.nodeTypeDlc,
+        node.subModCnt,
+        node.configCrc,
+        Date.now()
+    );
+
+    console.log("Sub-modules update commit")
+    /** Now update the sub-modules, tell function to force update */
+    seedSubModules(nodeId, node, true);
+
 }
 
 function updateParentNodeField(nodeId, fieldId, value) {
@@ -925,7 +965,7 @@ function updateParentNodeField(nodeId, fieldId, value) {
     /** insert row into audit log */
     insertAuditLog(nodeId, null, column, oldValue, value);
 
-    console.log(`Updated parent node ${nodeId} fieldId ${fieldId} column ${column} value ${value}`);
+    console.log(`Updated node ${nodeId} fieldId ${fieldId} column ${column} value ${value.toString(HEX_BASE)}`);
 
     db.prepare(`
         UPDATE node_intended
@@ -1681,7 +1721,7 @@ function updateNodeDatabase(msg) {
             console.warn(
                 "CRC mismatch detected for node ", nodeString,
                 "Cached CRC: 0x", myNode.configCrc.toString(HEX_BASE), 
-                "Reported CRC: 0x", incomingCrc, 
+                `Reported CRC: 0x${incomingCrc.toString(HEX_BASE)}` 
             );
 
             /* Snapshot the current (old) state before we overwrite it with the new CRC data */
