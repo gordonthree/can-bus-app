@@ -127,6 +127,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 tryDBRender(); /* Attempt to render the node database */
                 break;
 
+            case 'NODE_UPDATE':
+                updateNodeDatabase(message.payload);
+                break;
+
             case 'AUDIT_LOG_UPDATE':
                 renderAuditLog(message.payload);
                 break;
@@ -223,7 +227,24 @@ function debugPrintFieldOptions(fieldId) {
     );
 }
 
+/** Find and replace node info in canDatabase */
+function updateNodeDatabase(newDatabaseEntry){
+    /** Pretty print the object to console */
+    // console.log(JSON.stringify(newDatabaseEntry, null, 2));
 
+    const nodeId = newDatabaseEntry.nodeId;
+    /** Update the canDatabase object */
+    canDatabase[nodeId] = newDatabaseEntry;
+    console.log(`Updated canDatabase for node ${nodeId}`);
+
+    /** Collapse the node if it's expanded */
+    if (expandedNodes.has(nodeId)) {
+       expandedNodes.delete(nodeId);
+    }
+
+    renderNodeDatabase(canDatabase);
+
+}
 
 /**
  * Helper to build a dropdown select element.
@@ -353,6 +374,26 @@ function interviewNode(nodeId) {
  * @param {number} subIdx - The index of the updated sub-module.
  */
 function handleSaveConfirmation(nodeId, subIdx) {
+    const subKey = `${nodeId}-${subIdx}`;
+    /* Target the specific cells related to this sub-module */
+    const cells = document.querySelectorAll(`.node-${nodeId}`);
+    
+    cells.forEach(cell => {
+        /* We check the unique IDs we set in the renderer to only flash the specific row */
+        if (cell.innerHTML.includes(`id="msg-${subKey}"`) || 
+            cell.innerHTML.includes(`id="raw-${subKey}"`)) {
+            
+            cell.classList.add('flash-success');
+            
+            /* Remove class after animation finishes so it can be re-triggered */
+            setTimeout(() => {
+                cell.classList.remove('flash-success');
+            }, 1500); /**< Matches CSS animation duration */
+        }
+    });
+}
+
+function removeNodeCells(nodeId) {
     const subKey = `${nodeId}-${subIdx}`;
     /* Target the specific cells related to this sub-module */
     const cells = document.querySelectorAll(`.node-${nodeId}`);
@@ -820,6 +861,7 @@ function renderSubmoduleCard(nodeId, idxStr, subMod) {
 
 function renderNodeDataCell(nodeId, nodeData) {
     const dataCell = document.createElement('div');
+    dataCell.id = `${nodeId}-data-cell`;
     dataCell.className = 'data-cell';
     dataCell.classList.add('config-cell');
 
@@ -968,6 +1010,7 @@ function renderNodeIndicatorCell(nodeId, nodeData) {
     // indicator container
     const indicatorGrid = document.createElement('div');
     indicatorGrid.className = 'indicator-grid'; // 2x2 grid
+    indicatorGrid.id        = `node-${nodeId}-indicator-grid`;
 
     /** Badge to the node id cell to show overall sync status - check mark and caution symbol */
     const nodeSyncBadge = document.createElement("div");
@@ -1051,6 +1094,8 @@ function renderNodeIdCell(nodeId, nodeData) {
     // 2. ID Cell
     const idCell = document.createElement('div');
     idCell.className = 'data-cell';
+    /** name this container so we can find it later */
+    idCell.id        = `${nodeId}-id-cell`; 
     idCell.classList.add('id-cell');
     /** add coloration if node is not in sync */
     if (!nodeData.isInSync) {
@@ -1167,10 +1212,8 @@ function renderNodeDatabase(nodes) {
     const container = document.getElementById('editor-container');
     if (!container) return;
 
-    /** Header row: three columns
-     * Command | Hardware ID | Configuration
-     * This seems to work as HTML, doing it through JS causes
-     * the expand/collapse function to break
+    /** Header row: 4 columns
+     * Command | Hardware | Info Flags | Configuration
      */
     container.innerHTML = `
         <div class="header-cell">Command</div>
@@ -1235,8 +1278,9 @@ function toggleSubModules(event, nodeId) {
     rows.forEach(row => row.classList.toggle('expanded'));
     
     // Update button text safely using the passed event
+    if (!event) return; // bail out if we don't have an event
     const btn = event.target;
-    btn.innerText = btn.innerText === '+' ? '-' : '+';
+    btn.innerText = btn.innerText === '[+]' ? '[-]' : '[+]';
 }
 
 /**
