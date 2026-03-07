@@ -725,6 +725,12 @@ function broadcastDatabase(nodeString) {
             client.send(payload);
         }
     }
+
+    /** If this was an automatic re-send, remove the flag */
+    if (canDatabase[nodeString].resendToClient) {
+        /** remote element from the database */
+        delete canDatabase[nodeString].resendToClient;
+    }
 }
 
 
