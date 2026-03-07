@@ -429,7 +429,8 @@ wss.on('connection', (ws) => {
                             break;
                         }
 
-                        const crc = nodeObj.intended.config_crc;
+                        // const crc = nodeObj.intended.config_crc;
+                        const crc = nodeObj.configCrc;
 
                         // Convert nodeId string → byte array (big-endian)
                         const nodeIdBytes = hexStringToByteArray(nodeId);
@@ -711,10 +712,10 @@ function updateCalculatedCRC(nodeId) {
  * Broadcasts the current in-memory CAN database to all connected clients.
  * This is used to refresh the UI when a node is added, updated, or reset.
  */
-function broadcastDatabase() {
+function broadcastDatabase(nodeString) {
     const payload = JSON.stringify({
-        type: 'DATABASE_UPDATE',
-        payload: canDatabase
+        type: 'NODE_UPDATE',
+        payload: canDatabase[nodeString]
     });
 
     for (const client of wss.clients) {
@@ -725,6 +726,7 @@ function broadcastDatabase() {
         }
     }
 }
+
 
 /**
  * Imports message definitions from the Google Sheets CSV.
@@ -1587,6 +1589,9 @@ function detectMissingSubmodules(nodeString, myNode) {
 function resetNodeFlags(myNode) {
     myNode.lastSubModIdx = 0;
     myNode.introComplete = false;
+    
+    /* Set a flag to transmit new data to client once interview completes*/
+    myNode.resendToClient = true; 
 
     // Preserve the subModule object, but clear its contents
     if (!myNode.subModule) {
@@ -1653,20 +1658,26 @@ function updateNodeDatabase(msg) {
         const incomingCrc = ((msg.data[CONFIGCRC_OFFSET] << SHIFT_BYTE) |
                              (msg.data[CONFIGCRC_OFFSET + 1] & BYTE_MASK));
 
-        console.log(`Incoming CRC for node ${nodeString}: 0x${incomingCrc.toString(16)}`);
+        // console.log(`Incoming CRC for node ${nodeString}: 0x${incomingCrc.toString(HEX_BASE).toUpperCase()}`);
         /** * CRC Change Detection Logic
          * If we know this node and the CRC is different, archive the state.
          */
-        const crcChanged = ( 
+        const crcChanged = 
+        ( 
             isKnownNode && 
-            myNode.configCrc !== undefined && 
-            myNode.configCrc !== incomingCrc
+            incomingCrc !== myNode.configCrc
         );
 
         if (crcChanged) {
-            console.warn(`CRC mismatch detected for node ${nodeString}: 0x${myNode.configCrc.toString(16)} -> 0x${incomingCrc.toString(16)}`);
+            console.warn(
+                "CRC mismatch detected for node ", nodeString,
+                "Cached CRC: 0x", myNode.configCrc.toString(HEX_BASE), 
+                "Reported CRC: 0x", incomingCrc, 
+            );
+
             /* Snapshot the current (old) state before we overwrite it with the new CRC data */
             recordNodeSnapshot(nodeString, myNode);
+
             /** reset flags so the interview process starts over */
             resetNodeFlags(myNode);
 
@@ -1723,6 +1734,12 @@ function updateNodeDatabase(msg) {
 
             /** Mark this interview as complete */
             myNode.introComplete = true;
+
+            if (myNode.resendToClient) {
+                console.log("Node:", nodeString, "interview complete, sending new data to clients");
+                broadcastDatabase(nodeString);
+            }
+
             // console.log("Node:", nodeString, "interview complete, not sending ack");
         } else {
             console.log("Introduction: ", nodeString, "Sub-mods:", myNode.subModCnt, `CRC: 0x${myNode.configCrc.toString(16).toUpperCase().padStart(4, "0")}` );
